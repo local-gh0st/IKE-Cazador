@@ -17,6 +17,13 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# === Optional jitter flag ===
+USE_JITTER=false
+if [[ "$@" =~ "-j" ]]; then
+    USE_JITTER=true
+    echo -e "${GREEN}[*] Jitter enabled: random delay between 0.3s–0.7s per request${NC}"
+fi
+
 # === Check arguments ===
 if [ -z "$1" ] || [ -z "$WORDLIST" ]; then
     echo -e "${YELLOW}Usage: $0 <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
@@ -62,7 +69,13 @@ for TARGET in "${TARGETS[@]}"; do
             echo -e "${RED}[INVALID]${NC}"
         fi
 
-        sleep "$DELAY"
+if [ "$USE_JITTER" = true ]; then
+    RANDOM_DELAY=$(awk -v min=0.3 -v max=0.7 'BEGIN{srand(); print min+rand()*(max-min)}')
+    sleep "$RANDOM_DELAY"
+else
+    sleep "$DELAY"
+fi
+
     done < "$WORDLIST"
 
     echo ""
