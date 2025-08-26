@@ -21,7 +21,7 @@ NC='\033[0m' # No Color
 USE_JITTER=false
 if [[ "$@" =~ "-j" ]]; then
     USE_JITTER=true
-    echo -e "${GREEN}[*] Jitter enabled: random delay between 0.3s–0.7s per request${NC}"
+    echo -e "${GREEN}[*] Jitter enabled: random delay between 0.3s–0.99s per request${NC}"
 fi
 
 # === Check arguments ===
@@ -70,7 +70,7 @@ for TARGET in "${TARGETS[@]}"; do
         fi
 
 if [ "$USE_JITTER" = true ]; then
-    RANDOM_DELAY=$(awk -v min=0.3 -v max=0.7 'BEGIN{srand(); print min+rand()*(max-min)}')
+    RANDOM_DELAY=$(awk -v min=0.3 -v max=0.99 'BEGIN{srand(); print min+rand()*(max-min)}')
     sleep "$RANDOM_DELAY"
 else
     sleep "$DELAY"
