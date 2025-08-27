@@ -2,25 +2,27 @@
 
 # ╔══════════════════════════════════════════════╗
 # ║         IKE-Cazador                          ║
-# ║         Group-ID Brute-Force Script          ║
+# ║         Group ID Brute Force Script          ║
 # ║         local-gh0st                          ║
-# ║                                              ║
-# ║  License/Disclaimer:                         ║
-# ║  This script is for educational and/or       ║
-# ║  ethical use only.                           ║
-# ║                                              ║
-# ║  Do not redistribute for monetary gain.      ║
-# ║  Do not use for malicious purposes or        ║
-# ║  against networks for which you do not have  ║ 
-# ║  authorization to test.                      ║
-# ║                                              ║
-# ║  Unauthorized use is prohibited.             ║
 # ╚══════════════════════════════════════════════╝
 
 # === Configuration ===
-WORDLIST="$2"
+if [[ -z "$2" || "$2" =~ ^- ]]; then
+    WORDLIST="ike-groupid.txt"
+else
+    WORDLIST="$2"
+fi
+
 DELAY=0.2
 LOGFILE="valid-groupids.log"
+PORT=500  # Default IKE port
+
+for ((i=1; i<=$#; i++)); do
+    if [[ "${!i}" == "-p" ]]; then
+        next=$((i+1))
+        PORT="${!next}"
+    fi
+done
 
 # === Colors ===
 GREEN='\033[0;32m'
@@ -55,9 +57,11 @@ fi
 
 if [[ "$@" =~ "-h" ]] || [[ "$@" =~ "-help" ]]; then
     echo -e "${YELLOW}Usage: ./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
+    echo -e "${YELLOW}(Will use built-in wordlist from \"/danielmiessler/SecLists\" if nothing else is specified).${NC}"
     echo ""
-    echo -e "${YELLOW}[-r] = Use \"Group-first\" rotation to slow the requests per second against multiple targets${NC}"
+    echo -e "${YELLOW}[-r] = Use \"Group-first\" rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.${NC}"
     echo -e "${YELLOW}[-j] = Add a \"delay\" of .3-.99 seconds per attempt, should emulate more realistic user behavior${NC}"
+    echo -e "${YELLOW}[-p] = Destination port. Specify the IKE port with -p <x> (default: 500)${NC}"
     exit 0
 fi
 
@@ -65,8 +69,9 @@ fi
 if [ -z "$1" ] || [ -z "$WORDLIST" ]; then
     echo -e "${YELLOW}Usage: ./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
     echo ""
-    echo -e "${YELLOW}[-r] = Use \"Group-first\" rotation to slow the requests per second against multiple targets${NC}"
+    echo -e "${YELLOW}[-r] = Use \"Group-first\" rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.${NC}"
     echo -e "${YELLOW}[-j] = Add a \"delay\" of .3-.99 seconds per attempt, should emulate more realistic user behavior${NC}"
+    echo -e "${YELLOW}[-p] = Destination port. Specify the IKE port with -p <x> (default: 500)${NC}"
     exit 1
 fi
 
@@ -92,6 +97,7 @@ fi
 
 echo -e "${GREEN}[*] Loaded ${#TARGETS[@]} target(s)${NC}"
 echo -e "${GREEN}[*] Using wordlist: $WORDLIST${NC}"
+echo -e "${GREEN}[*] Using UDP port: $PORT${NC}"
 echo -e "${GREEN}[*] Logging valid results to: $LOGFILE${NC}"
 echo ""
 
@@ -107,7 +113,7 @@ if [ "$USE_ROTATION" = true ]; then
         for TARGET in "${TARGETS[@]}"; do
             echo -ne "${YELLOW}[~] Testing $GROUPID on $TARGET... ${NC}"
 
-            OUTPUT=$(timeout 5s sudo ike-scan -A -M --id="$GROUPID" "$TARGET" 2>/dev/null)
+            OUTPUT=$(timeout 5s sudo ike-scan -A -M --id="$GROUPID" -d "$PORT" "$TARGET" 2>/dev/null)
 
             if echo "$OUTPUT" | grep -q "Aggressive Mode Handshake returned"; then
                 echo -e "${GREEN}[VALID]${NC}"
@@ -132,7 +138,7 @@ else
         for GROUPID in "${GROUP_IDS[@]}"; do
             echo -ne "${YELLOW}[~] Testing group ID: $GROUPID${NC}... "
 
-            OUTPUT=$(timeout 5s sudo ike-scan -A -M --id="$GROUPID" "$TARGET" 2>/dev/null)
+            OUTPUT=$(timeout 5s sudo ike-scan -A -M --id="$GROUPID" -d "$PORT" "$TARGET" 2>/dev/null)
 
             if echo "$OUTPUT" | grep -q "Aggressive Mode Handshake returned"; then
                 echo -e "${GREEN}[VALID]${NC}"
