@@ -85,10 +85,16 @@ if [ ! -f "$WORDLIST" ]; then
     exit 1
 fi
 
+if ! command -v ike-scan &> /dev/null; then
+    echo -e "${RED}[!] ike-scan not found. Please install it and run this script with sudo.${NC}"
+    exit 1
+fi
+
 # === Validate target argument ===
 is_valid_ip() {
     [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && \
     awk -F. '{for(i=1;i<=4;i++) if($i<0||$i>255) exit 1}' <<< "$1"
+    return $?
 }
 
 TARGETS=()
