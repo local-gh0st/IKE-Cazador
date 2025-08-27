@@ -1,4 +1,4 @@
-<img width="503" height="498" alt="cazador" src="https://github.com/user-attachments/assets/6672f5c5-4a18-4378-a4de-b59725c3755e" />
+<img width="574" height="570" alt="cazador" src="https://github.com/user-attachments/assets/2a1a2b05-569a-4677-9e64-edfc76f9f721" />
 
 
 # IKE-Cazador
