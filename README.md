@@ -6,11 +6,11 @@ Tool has a "group-first" rotation feature.
 When enabled, the script will brute force by group ID in a round-robin fashion.
 Instead of testing all group IDs against one host before moving to the next host, it will:
 - Take the first group ID from the wordlist and try it against every host in your target list.
-- Then move to the next group ID and repeat the process for all hosts.
+- Move to the next group ID and repeat the process for all hosts.
 - This continues until all group IDs have been tested against all hosts.
 - This approach spreads requests across multiple hosts, which can help avoid rate-limiting or
 detection by not hammering a single host with all group IDs at once.
-
+*Think "password spraying" versus "brute forcing". 
 
 
      IKE-Cazador
