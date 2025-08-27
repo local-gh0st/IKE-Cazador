@@ -30,6 +30,7 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 SOFT_YELLOW='\033[0;33m'
 BLUE='\033[1;34m'
+WHITE='\033[0;37m'  # Regular white, not bold
 NC='\033[0m'
 VALID_PAIRS=()
 
@@ -56,22 +57,25 @@ if [[ "$@" =~ "-debug" ]]; then
 fi
 
 if [[ "$@" =~ "-h" ]] || [[ "$@" =~ "-help" ]]; then
-    echo -e "${YELLOW}Usage: ./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
+    echo -e "${YELLOW}Usage:${NC}"
+    echo -e "${WHITE}./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
     echo -e "${YELLOW}(Will use built-in wordlist from \"/danielmiessler/SecLists\" if nothing else is specified).${NC}"
     echo ""
-    echo -e "${YELLOW}[-r] = Use \"Group-first\" rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.${NC}"
-    echo -e "${YELLOW}[-j] = Add a \"delay\" of .3-.99 seconds per attempt, should emulate more realistic user behavior${NC}"
-    echo -e "${YELLOW}[-p] = Destination port. Specify the IKE port with -p <x> (default: 500)${NC}"
+    echo -e "${YELLOW}[-r] =${NC} ${WHITE}Use \"Group-first\" rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.${NC}"
+    echo -e "${YELLOW}[-j] =${NC} ${WHITE}Add a \"delay\" of .3-.99 seconds per attempt, should emulate more realistic user behavior${NC}"
+    echo -e "${YELLOW}[-p] =${NC} ${WHITE}Destination port. Specify the IKE port with -p <x> (default: 500)${NC}"
     exit 0
 fi
 
 # === Check arguments ===
 if [ -z "$1" ] || [ -z "$WORDLIST" ]; then
-    echo -e "${YELLOW}Usage: ./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
+    echo -e "${YELLOW}Usage:${NC}"
+    echo -e "${WHITE}./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt>${NC}"
+    echo -e "${YELLOW}(Will use built-in wordlist from \"/danielmiessler/SecLists\" if nothing else is specified).${NC}"
     echo ""
-    echo -e "${YELLOW}[-r] = Use \"Group-first\" rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.${NC}"
-    echo -e "${YELLOW}[-j] = Add a \"delay\" of .3-.99 seconds per attempt, should emulate more realistic user behavior${NC}"
-    echo -e "${YELLOW}[-p] = Destination port. Specify the IKE port with -p <x> (default: 500)${NC}"
+    echo -e "${YELLOW}[-r] =${NC} ${WHITE}Use \"Group-first\" rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.${NC}"
+    echo -e "${YELLOW}[-j] =${NC} ${WHITE}Add a \"delay\" of .3-.99 seconds per attempt, should emulate more realistic user behavior${NC}"
+    echo -e "${YELLOW}[-p] =${NC} ${WHITE}Destination port. Specify the IKE port with -p <x> (default: 500)${NC}"
     exit 1
 fi
 
@@ -81,23 +85,43 @@ if [ ! -f "$WORDLIST" ]; then
     exit 1
 fi
 
-# === Load target(s) ===
+# === Validate target argument ===
+is_valid_ip() {
+    [[ "$1" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && \
+    awk -F. '{for(i=1;i<=4;i++) if($i<0||$i>255) exit 1}' <<< "$1"
+}
+
 TARGETS=()
 if [[ -f "$1" ]]; then
     echo -e "${GREEN}[*] Loading targets from file: $1${NC}"
     while IFS= read -r line || [[ -n "$line" ]]; do
-        # Skip blank lines and lines starting with #
         [[ -z "$line" ]] && continue
         [[ "${line:0:1}" == "#" ]] && continue
         TARGETS+=("$line")
     done < "$1"
-else
+elif is_valid_ip "$1"; then
     TARGETS+=("$1")
+else
+    echo -e "${RED}[!] Invalid target: '$1' is not a valid IP address or file.${NC}"
+    exit 1
 fi
 
 echo -e "${GREEN}[*] Loaded ${#TARGETS[@]} target(s)${NC}"
-echo -e "${GREEN}[*] Using wordlist: $WORDLIST${NC}"
-echo -e "${GREEN}[*] Using UDP port: $PORT${NC}"
+
+# === Wordlist message ===
+if [[ "$WORDLIST" == "ike-groupid.txt" ]]; then
+    echo -e "${GREEN}[*] Using default wordlist: $WORDLIST${NC}"
+else
+    echo -e "${GREEN}[*] Using user-specified wordlist: $WORDLIST${NC}"
+fi
+
+# === Port message ===
+if [[ "$PORT" == "500" ]]; then
+    echo -e "${GREEN}[*] Using default UDP port: $PORT${NC}"
+else
+    echo -e "${GREEN}[*] Using user-specified UDP port: $PORT${NC}"
+fi
+
 echo -e "${GREEN}[*] Logging valid results to: $LOGFILE${NC}"
 echo ""
 
@@ -111,7 +135,7 @@ if [ "$USE_ROTATION" = true ]; then
         echo -e "${YELLOW}=== Testing Group ID: $GROUPID ===${NC}"
 
         for TARGET in "${TARGETS[@]}"; do
-            echo -ne "${YELLOW}[~] Testing $GROUPID on $TARGET... ${NC}"
+            echo -ne "${YELLOW}[~] ${WHITE}Testing $GROUPID on $TARGET... ${NC}"
 
             OUTPUT=$(timeout 5s sudo ike-scan -A -M --id="$GROUPID" -d "$PORT" "$TARGET" 2>/dev/null)
 
@@ -136,7 +160,7 @@ else
         echo -e "${YELLOW}--- Scanning target: $TARGET ---${NC}"
 
         for GROUPID in "${GROUP_IDS[@]}"; do
-            echo -ne "${YELLOW}[~] Testing group ID: $GROUPID${NC}... "
+            echo -ne "${YELLOW}[~] ${WHITE}Testing group ID: $GROUPID on $TARGET... ${NC}"
 
             OUTPUT=$(timeout 5s sudo ike-scan -A -M --id="$GROUPID" -d "$PORT" "$TARGET" 2>/dev/null)
 
