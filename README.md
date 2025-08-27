@@ -17,7 +17,9 @@ Brute force Group IDs for network devices configured with IKE Aggressive mode.
   Unauthorized use is prohibited.
 
 
-**Why this is potentially useful**
+
+**Why this tool is potentially useful:**
+
 Tool has a "group-first" rotation feature.
 When enabled, the script will brute force by group ID in a round-robin fashion.
 Instead of testing all group IDs against one host before moving to the next host, it will:
