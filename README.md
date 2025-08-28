@@ -37,10 +37,16 @@ detection by not hammering a single host with all group IDs at once.
 **Install and Usage**
 ```
 
+bash
 1. git pull
 2. chmod +x IKE-Cazador.sh
 3. ./IKE-Cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt
 
+python
+python3 IKE-Cazador.py targets words
+
 **Optional Flags**
-[-j]    adds a delay between requests of .3-.99 seconds. Meant to emulate real user behavior. Useful for when targeting 1-2 devices and iterating through a large wordlist.
-[-r]    uses a Group-first rotation: Tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate-limiting
+(but good iea to use)
+[-r] = Use 'Group-first' rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.
+[-j] = Add a 'delay' of .3-.99 seconds per attempt, should emulate more realistic user behavior
+[-p] = Destination port. Specify the IKE port with -p <x> (default: 500)
