@@ -40,7 +40,8 @@ python3 ike-cazador.py targets words
 
 **Optional Flags**
 (but good iea to use)
-[-r] = Use 'Group-first' rotation: tries each group ID against all hosts before moving to the next group ID (round-robin). Helps avoid hammering a single host and can bypass rate limits.
-[-j] = Add a 'delay' of .3-.99 seconds per attempt, should emulate more realistic user behavior
+[-r] = Use 'Group-first' rotation: tries each group ID against all hosts before moving to the next group ID
+       (round-robin style). Helps avoid hammering a single host and can bypass rate limits.
+[-j] = Jitter. Add a 'delay' of .3-.99 seconds per attempt, should emulate more realistic user behavior
 [-p] = Destination port. Specify the IKE port with -p <x> (default: 500)
 [-q] = quiet mode if you don't want to see live output displayed on screen
