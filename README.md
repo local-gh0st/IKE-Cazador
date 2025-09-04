@@ -31,9 +31,9 @@ detection by not hammering a single host with all group IDs at once.
 ```
 
 bash
-1. git clone
-2. chmod +x ike-cazador.sh
-3. ./ike-cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt
+git clone
+chmod +x ike-cazador.sh
+./ike-cazador.sh <target_ip OR targets_list.txt> <groupid_wordlist.txt
 
 python
 python3 ike-cazador.py targets words
