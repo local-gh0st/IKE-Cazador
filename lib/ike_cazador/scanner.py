@@ -79,6 +79,7 @@ class Scanner:
         self.start_time = None
         self.completed_requests = 0
         self.total_requests = 0
+        self.progress_lock = asyncio.Lock()  # Thread-safe progress updates
     
     def scan(self, targets, wordlist):
         """
@@ -211,16 +212,18 @@ class Scanner:
         
         # Skip if target already marked unreachable or misconfigured
         if results.is_unreachable(target) or results.is_misconfigured(target):
-            self.completed_requests += 1
+            async with self.progress_lock:
+                self.completed_requests += 1
             return
         
         # Apply jitter if enabled (async sleep)
         if self.config.jitter_enabled:
             await self._apply_jitter_async()
         
-        # Update progress
-        self.completed_requests += 1
-        self._display_progress(current_target=target, current_id=group_id)
+        # Update progress (thread-safe)
+        async with self.progress_lock:
+            self.completed_requests += 1
+            self._display_progress(current_target=target, current_id=group_id)
         
         # Execute ike-scan test (async)
         result = await self.ike_tester.test_group_id_async(
