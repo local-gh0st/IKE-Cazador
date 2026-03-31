@@ -15,6 +15,7 @@ class ScanResults:
         self.suspicious = {}      # {target: [group_id, ...]}
         self.errors = {}          # {target: [(group_id, IKEResult), ...]}
         self.unreachable = set()  # {target, ...}
+        self.misconfigured = set() # {target, ...} - accepts ANY Group ID
     
     def add_valid(self, target, group_id, result):
         """Add valid Group ID"""
@@ -47,6 +48,14 @@ class ScanResults:
     def is_unreachable(self, target):
         """Check if target is marked unreachable"""
         return target in self.unreachable
+    
+    def mark_misconfigured(self, target):
+        """Mark target as misconfigured (accepts any Group ID)"""
+        self.misconfigured.add(target)
+    
+    def is_misconfigured(self, target):
+        """Check if target is marked as misconfigured"""
+        return target in self.misconfigured
     
     def get_error_count(self, target):
         """Get error count for target"""
@@ -101,8 +110,8 @@ class Scanner:
     def _scan_sequential(self, targets, wordlist, results):
         """Sequential mode: test all IDs against target1, then target2, etc."""
         for target in targets:
-            if results.is_unreachable(target):
-                # Skip this entire target - already marked unreachable
+            if results.is_unreachable(target) or results.is_misconfigured(target):
+                # Skip this entire target - already marked unreachable or misconfigured
                 self.completed_requests += len(wordlist)
                 continue
             
@@ -118,8 +127,8 @@ class Scanner:
     def _test_and_validate(self, target, group_id, results):
         """Test a single target+group_id combination"""
         
-        # Skip if target already marked unreachable
-        if results.is_unreachable(target):
+        # Skip if target already marked unreachable or misconfigured
+        if results.is_unreachable(target) or results.is_misconfigured(target):
             self.completed_requests += 1
             return
         
@@ -129,7 +138,7 @@ class Scanner:
         
         # Update progress
         self.completed_requests += 1
-        self._display_progress()
+        self._display_progress(current_target=target, current_id=group_id)
         
         # Execute ike-scan test
         result = self.ike_tester.test_group_id(
@@ -162,12 +171,17 @@ class Scanner:
         if validation_result == 'TRUE_POSITIVE':
             results.add_valid(target, group_id, result)
             self.output.display_true_positive(target, group_id)
+            self.output.log_valid_result(target, group_id, result)
         elif validation_result == 'FALSE_POSITIVE':
             results.add_false_positive(target, group_id)
+            results.mark_misconfigured(target)  # Skip all remaining tests for this target
             self.output.display_false_positive(target, group_id)
+            self.output.log_misconfigured_target(target, group_id)
+            self.output.display_target_skipped(target, "misconfigured")
         elif validation_result == 'SUSPICIOUS':
             results.add_suspicious(target, group_id)
             self.output.display_suspicious(target, group_id)
+            self.output.log_valid_result(target, group_id, result)  # Log suspicious as well
         
         # Resume progress display
         print()  # Newline after validation
@@ -190,7 +204,7 @@ class Scanner:
         actual_delay = base_delay + jitter
         time.sleep(actual_delay)
     
-    def _display_progress(self):
+    def _display_progress(self, current_target=None, current_id=None):
         """Display progress with ETA"""
         percentage = (self.completed_requests / self.total_requests) * 100
         
@@ -207,5 +221,7 @@ class Scanner:
             self.completed_requests,
             self.total_requests,
             percentage,
-            eta_seconds
+            eta_seconds,
+            current_target,
+            current_id
         )

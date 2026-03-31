@@ -21,18 +21,20 @@ class OutputHandler:
         
         # Create log files
         self.main_log = open(f"{session_dir}/phase1_full_log.txt", 'w')
-        self.error_log = open(f"{session_dir}/errors.txt", 'w')
+        self.valid_results_log = open(f"{session_dir}/valid_results.txt", 'w')
+        self.error_log = open(f"{session_dir}/errors_and_misconfigured.txt", 'w')
     
     def close(self):
         """Close log files"""
         self.main_log.close()
+        self.valid_results_log.close()
         self.error_log.close()
     
     def display_banner(self):
         """Display ASCII banner"""
         banner = f"""{self.c.PURPLE}{self.c.BOLD}═══════════════════════════════════════════════════════════
   IKE-CAZADOR | VPN Group ID Discovery Tool
-  Version 1.0.0 | IKE Aggressive Mode Enumeration
+  Version 1.1.1 | IKE Aggressive Mode Enumeration
 ═══════════════════════════════════════════════════════════{self.c.RESET}
 """
         print(banner)
@@ -59,14 +61,24 @@ class OutputHandler:
         print(f"  Port: {config.port} (UDP)")
         print()
     
-    def display_progress(self, completed, total, percentage, eta_seconds):
-        """Display progress bar with ETA"""
+    def display_progress(self, completed, total, percentage, eta_seconds, current_target=None, current_id=None):
+        """Display progress bar with ETA and current test"""
         if self.quiet:
             return
         
         eta_str = format_time(eta_seconds)
-        print(f"\r[*] Progress: {completed}/{total} ({percentage:.1f}%) - ETA: {eta_str}", 
-              end='', flush=True)
+        msg = f"\r[*] Progress: {completed}/{total} ({percentage:.1f}%)"
+        
+        if current_target and current_id:
+            msg += f" | Testing: {self.c.CYAN}{current_target}{self.c.RESET} + {self.c.CYAN}\"{current_id}\"{self.c.RESET}"
+        
+        msg += f" | ETA: {eta_str}"
+        print(msg, end='', flush=True)
+    
+    def display_target_skipped(self, target, reason):
+        """Display when target is skipped"""
+        msg = f"\n{self.c.YELLOW}[!]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} marked as {reason} - skipping all remaining tests"
+        print(msg)
     
     def display_potential_valid(self, target, group_id):
         """Display when potential valid Group ID found"""
@@ -75,7 +87,7 @@ class OutputHandler:
     
     def display_validation_start(self, target, group_id):
         """Display validation module start"""
-        msg = f"{self.c.PURPLE}{self.c.BOLD}[*] Validation module starting...{self.c.RESET}"
+        msg = f"{self.c.PURPLE}{self.c.BOLD}[*] Validation module starting (5 tests, ~50 seconds)...{self.c.RESET}"
         print(msg)
     
     def display_validation_test(self, num, total, test_id, target):
@@ -153,6 +165,35 @@ class OutputHandler:
         self.error_log.write("=" * 80 + "\n")
         self.error_log.flush()
     
+    def log_valid_result(self, target, group_id, result):
+        """Log valid Group ID to valid results file"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.valid_results_log.write(f"\n[{timestamp}] VALID GROUP ID FOUND\n")
+        self.valid_results_log.write(f"Target: {target}\n")
+        self.valid_results_log.write(f"Group ID: {group_id}\n")
+        self.valid_results_log.write(f"Command: ike-scan -M -A --id={group_id} {target}\n")
+        
+        if result.encryption:
+            self.valid_results_log.write(f"Transform Set: Enc={result.encryption}, Hash={result.hash_algorithm}, Group={result.dh_group}, Auth={result.auth_method}\n")
+        
+        self.valid_results_log.write("\nFull Output:\n")
+        if result.raw_output:
+            self.valid_results_log.write(result.raw_output + "\n")
+        
+        self.valid_results_log.write("=" * 80 + "\n")
+        self.valid_results_log.flush()
+    
+    def log_misconfigured_target(self, target, group_id):
+        """Log misconfigured target to error log"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.error_log.write(f"\n[{timestamp}] MISCONFIGURED TARGET DETECTED\n")
+        self.error_log.write(f"Target: {target}\n")
+        self.error_log.write(f"Initial Group ID: {group_id}\n")
+        self.error_log.write(f"Issue: Target accepts ANY Group ID (false positive)\n")
+        self.error_log.write(f"Action: Skipping all remaining tests for this target\n")
+        self.error_log.write("=" * 80 + "\n")
+        self.error_log.flush()
+    
     def display_phase1_summary(self, results, scan_time):
         """Display Phase 1 summary"""
         print(f"\n\n{self.c.PURPLE}{self.c.BOLD}═══════════════════════════════════════════════════════════")
@@ -175,11 +216,12 @@ class OutputHandler:
                 for group_id in group_ids:
                     print(f"  {self.c.YELLOW}⚠{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} : {group_id} {self.c.GRAY}(manual verification needed){self.c.RESET}")
         
-        # False positives
+        # False positives / Misconfigured targets
         if results.false_positives:
-            print(f"\n{self.c.RED}False Positives: {sum(len(v) for v in results.false_positives.values())}{self.c.RESET}")
-            for target in results.false_positives:
-                print(f"  {self.c.RED}✗{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} {self.c.GRAY}(misconfigured - accepts any Group ID){self.c.RESET}")
+            print(f"\n{self.c.RED}Misconfigured Targets (Accept Any Group ID): {len(results.false_positives)}{self.c.RESET}")
+            for target, group_ids in results.false_positives.items():
+                count = len(group_ids)
+                print(f"  {self.c.RED}✗{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} {self.c.GRAY}(tested {count} ID{'s' if count > 1 else ''} before detection){self.c.RESET}")
         
         # Unreachable targets
         if results.unreachable:
@@ -187,7 +229,12 @@ class OutputHandler:
             for target in results.unreachable:
                 print(f"  {self.c.RED}✗{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} {self.c.GRAY}(timeout/unreachable){self.c.RESET}")
         
-        print(f"\nFull logs: {self.c.CYAN}{self.session_dir}/{self.c.RESET}")
+        print(f"\n{self.c.BOLD}Output Files:{self.c.RESET}")
+        print(f"  All tests: {self.c.CYAN}{self.session_dir}/phase1_full_log.txt{self.c.RESET}")
+        if results.valid or results.suspicious:
+            print(f"  Valid results: {self.c.GREEN}{self.session_dir}/valid_results.txt{self.c.RESET}")
+        if results.false_positives or results.errors or results.unreachable:
+            print(f"  Errors/Misconfigured: {self.c.RED}{self.session_dir}/errors_and_misconfigured.txt{self.c.RESET}")
     
     def display_phase2_commands(self, results, port):
         """Display Phase 2 commands for PSK capture"""
