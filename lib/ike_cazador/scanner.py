@@ -145,8 +145,14 @@ class Scanner:
                 self.completed_requests += len(targets)
                 continue
             
-            # Use config max_concurrent if set, otherwise use number of active targets (up to 20)
-            max_concurrent = getattr(self.config, 'max_concurrent', min(len(active_targets), 20))
+            # Determine concurrency limit
+            config_max = getattr(self.config, 'max_concurrent', None)
+            if config_max is None:
+                # Auto: use number of active targets (capped at 20)
+                max_concurrent = min(len(active_targets), 20)
+            else:
+                # User specified a limit
+                max_concurrent = config_max
             
             # Fire all active targets in parallel (respecting max_concurrent limit)
             tasks = []
