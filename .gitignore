@@ -1,0 +1,21 @@
+# Runtime outputs
+captures/
+*.pyc
+__pycache__/
+
+# Environment
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Images (design files, not needed in repo)
+*.png
