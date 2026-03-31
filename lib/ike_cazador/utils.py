@@ -54,6 +54,7 @@ class Config:
         self.quiet = args.quiet
         self.no_color = args.no_color
         self.timeout = args.timeout
+        self.max_concurrent = args.max_concurrent if hasattr(args, 'max_concurrent') else None
         
         # Create session directory
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

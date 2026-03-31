@@ -4,6 +4,7 @@ Scanner - Main scanning orchestration
 
 import time
 import random
+import asyncio
 
 
 class ScanResults:
@@ -95,11 +96,11 @@ class Scanner:
         
         results = ScanResults()
         
-        # Choose scanning mode
+        # Choose scanning mode - run async wrapper
         if self.config.round_robin:
-            self._scan_round_robin(targets, wordlist, results)
+            asyncio.run(self._scan_round_robin_async(targets, wordlist, results))
         else:
-            self._scan_sequential(targets, wordlist, results)
+            asyncio.run(self._scan_sequential_async(targets, wordlist, results))
         
         # Clear progress line
         if not self.config.quiet:
@@ -107,22 +108,64 @@ class Scanner:
         
         return results
     
-    def _scan_sequential(self, targets, wordlist, results):
-        """Sequential mode: test all IDs against target1, then target2, etc."""
+    async def _scan_sequential_async(self, targets, wordlist, results):
+        """Sequential mode with conservative parallelism (2x for single target)"""
         for target in targets:
             if results.is_unreachable(target) or results.is_misconfigured(target):
                 # Skip this entire target - already marked unreachable or misconfigured
                 self.completed_requests += len(wordlist)
                 continue
             
-            for group_id in wordlist:
-                self._test_and_validate(target, group_id, results)
+            # Process Group IDs in batches of 2 (conservative - won't overwhelm single VPN)
+            batch_size = 2
+            for i in range(0, len(wordlist), batch_size):
+                batch = wordlist[i:i + batch_size]
+                
+                # Fire batch in parallel
+                tasks = [
+                    self._test_and_validate_async(target, group_id, results)
+                    for group_id in batch
+                    if not results.is_misconfigured(target)  # Check before each batch
+                ]
+                
+                if tasks:
+                    await asyncio.gather(*tasks)
     
-    def _scan_round_robin(self, targets, wordlist, results):
-        """Round-robin mode: test ID1 against all targets, then ID2, etc."""
+    async def _scan_round_robin_async(self, targets, wordlist, results):
+        """Round-robin mode: test all targets in parallel per Group ID"""
         for group_id in wordlist:
-            for target in targets:
-                self._test_and_validate(target, group_id, results)
+            # Determine concurrency limit
+            # Max 20 concurrent to avoid CPU overload
+            active_targets = [t for t in targets 
+                            if not results.is_unreachable(t) 
+                            and not results.is_misconfigured(t)]
+            
+            if not active_targets:
+                # All targets skipped, update progress
+                self.completed_requests += len(targets)
+                continue
+            
+            # Use config max_concurrent if set, otherwise use number of active targets (up to 20)
+            max_concurrent = getattr(self.config, 'max_concurrent', min(len(active_targets), 20))
+            
+            # Fire all active targets in parallel (respecting max_concurrent limit)
+            tasks = []
+            for target in active_targets:
+                tasks.append(self._test_and_validate_async(target, group_id, results))
+            
+            # Execute with concurrency limit
+            if max_concurrent >= len(tasks):
+                # No limit needed, fire all
+                await asyncio.gather(*tasks)
+            else:
+                # Process in batches to respect max_concurrent
+                for i in range(0, len(tasks), max_concurrent):
+                    batch = tasks[i:i + max_concurrent]
+                    await asyncio.gather(*batch)
+            
+            # Update progress for any skipped targets
+            skipped = len(targets) - len(active_targets)
+            self.completed_requests += skipped
     
     def _test_and_validate(self, target, group_id, results):
         """Test a single target+group_id combination"""
@@ -153,6 +196,39 @@ class Scanner:
         # Handle result
         if result.status == 'VALID':
             self._handle_valid_result(target, group_id, result, results)
+        elif result.status in ['TIMEOUT', 'ERROR']:
+            self._handle_error_result(target, group_id, result, results)
+        # INVALID results are just logged, no action needed
+    
+    async def _test_and_validate_async(self, target, group_id, results):
+        """Async version: Test a single target+group_id combination"""
+        
+        # Skip if target already marked unreachable or misconfigured
+        if results.is_unreachable(target) or results.is_misconfigured(target):
+            self.completed_requests += 1
+            return
+        
+        # Apply jitter if enabled (async sleep)
+        if self.config.jitter_enabled:
+            await self._apply_jitter_async()
+        
+        # Update progress
+        self.completed_requests += 1
+        self._display_progress(current_target=target, current_id=group_id)
+        
+        # Execute ike-scan test (async)
+        result = await self.ike_tester.test_group_id_async(
+            target, 
+            group_id, 
+            port=self.config.port
+        )
+        
+        # Log to file
+        self.output.log_test(target, group_id, result)
+        
+        # Handle result
+        if result.status == 'VALID':
+            await self._handle_valid_result_async(target, group_id, result, results)
         elif result.status in ['TIMEOUT', 'ERROR']:
             self._handle_error_result(target, group_id, result, results)
         # INVALID results are just logged, no action needed
@@ -203,6 +279,43 @@ class Scanner:
         jitter = random.uniform(-0.2, 0.2)
         actual_delay = base_delay + jitter
         time.sleep(actual_delay)
+    
+    async def _apply_jitter_async(self):
+        """Async version: Apply randomized delay for stealth"""
+        # Base delay: 500ms, Jitter: ±200ms (300-700ms range)
+        base_delay = 0.5
+        jitter = random.uniform(-0.2, 0.2)
+        actual_delay = base_delay + jitter
+        await asyncio.sleep(actual_delay)
+    
+    async def _handle_valid_result_async(self, target, group_id, result, results):
+        """Async version: Handle potential valid Group ID"""
+        self.output.display_potential_valid(target, group_id)
+        
+        # Run validation module (async)
+        validation_result = await self.validator.validate_async(
+            target, 
+            group_id, 
+            self.config
+        )
+        
+        if validation_result == 'TRUE_POSITIVE':
+            results.add_valid(target, group_id, result)
+            self.output.display_true_positive(target, group_id)
+            self.output.log_valid_result(target, group_id, result)
+        elif validation_result == 'FALSE_POSITIVE':
+            results.add_false_positive(target, group_id)
+            results.mark_misconfigured(target)  # Skip all remaining tests for this target
+            self.output.display_false_positive(target, group_id)
+            self.output.log_misconfigured_target(target, group_id)
+            self.output.display_target_skipped(target, "misconfigured")
+        elif validation_result == 'SUSPICIOUS':
+            results.add_suspicious(target, group_id)
+            self.output.display_suspicious(target, group_id)
+            self.output.log_valid_result(target, group_id, result)  # Log suspicious as well
+        
+        # Resume progress display
+        print()  # Newline after validation
     
     def _display_progress(self, current_target=None, current_id=None):
         """Display progress with ETA"""

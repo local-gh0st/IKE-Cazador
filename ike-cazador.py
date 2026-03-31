@@ -126,14 +126,21 @@ Default wordlist: wordlists/group-id-wordlist.txt (450 Group IDs)
     parser.add_argument(
         '--timeout',
         type=int,
-        default=10,
-        help='ike-scan timeout in seconds (default: 10)'
+        default=5,
+        help='ike-scan timeout in seconds (default: 5)'
+    )
+    
+    parser.add_argument(
+        '--max-concurrent',
+        type=int,
+        default=None,
+        help='Max concurrent requests in round-robin mode (default: auto, max 20)'
     )
     
     parser.add_argument(
         '--version',
         action='version',
-        version='%(prog)s 1.1.1'
+        version='%(prog)s 1.1.2'
     )
     
     args = parser.parse_args()

@@ -34,7 +34,7 @@ class OutputHandler:
         """Display ASCII banner"""
         banner = f"""{self.c.PURPLE}{self.c.BOLD}═══════════════════════════════════════════════════════════
   IKE-CAZADOR | VPN Group ID Discovery Tool
-  Version 1.1.1 | IKE Aggressive Mode Enumeration
+  Version 1.1.2 | IKE Aggressive Mode Enumeration
 ═══════════════════════════════════════════════════════════{self.c.RESET}
 """
         print(banner)

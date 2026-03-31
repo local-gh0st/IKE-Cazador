@@ -3,6 +3,7 @@ IKE Tester - ike-scan wrapper and output parser
 """
 
 import subprocess
+import asyncio
 import re
 import shutil
 
@@ -29,7 +30,7 @@ class IKEResult:
 class IKETester:
     """Wrapper for ike-scan command execution and parsing"""
     
-    def __init__(self, timeout=10):
+    def __init__(self, timeout=5):
         self.timeout = timeout
         self.ike_scan_path = self._find_ike_scan()
     
@@ -175,3 +176,41 @@ class IKETester:
         
         if match:
             result.psk_parameters = match.group(1).strip()
+    
+    async def test_group_id_async(self, target, group_id, port=500):
+        """
+        Async version: Test a single Group ID against a target
+        
+        Returns:
+            IKEResult object with validity status and details
+        """
+        output, status = await self._execute_ike_scan_async(target, group_id, port)
+        return self._parse_output(output, status)
+    
+    async def _execute_ike_scan_async(self, target, group_id, port):
+        """Execute ike-scan subprocess asynchronously with timeout"""
+        cmd = [self.ike_scan_path, '-M', '-A', f'--id={group_id}']
+        if port != 500:
+            cmd.extend(['--dport', str(port)])
+        cmd.append(target)
+        
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(),
+                    timeout=self.timeout
+                )
+                return stdout.decode('utf-8', errors='ignore'), proc.returncode
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return None, 'TIMEOUT'
+                
+        except Exception as e:
+            return None, f'ERROR: {str(e)}'
