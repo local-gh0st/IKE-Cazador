@@ -177,6 +177,26 @@ class OutputHandler:
         msg = f"{self.c.RED}[!]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} unreachable - skipping remaining tests"
         print(msg)
     
+    def display_temporarily_unreachable(self, target):
+        """Display temporarily unreachable target (will retry in 30s)"""
+        msg = f"{self.c.YELLOW}[!]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} temporarily unreachable - will retry in 30s"
+        print(msg)
+    
+    def display_retry_attempt(self, target):
+        """Display retry attempt message"""
+        msg = f"{self.c.CYAN}[*]{self.c.RESET} Retrying {self.c.CYAN}{target}{self.c.RESET} after 30s cooldown..."
+        print(msg)
+    
+    def display_target_recovered(self, target):
+        """Display target recovered message"""
+        msg = f"{self.c.GREEN}[+]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} recovered - resuming tests"
+        print(msg)
+    
+    def display_permanently_unreachable(self, target):
+        """Display permanently unreachable target"""
+        msg = f"{self.c.RED}[!]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} permanently unreachable - skipping remaining tests"
+        print(msg)
+    
     def log_test(self, target, group_id, result):
         """Log test to main log file"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -256,7 +276,7 @@ class OutputHandler:
         
         targets_with_valid = len(results.valid)
         print(f"  Targets with valid Group IDs: {targets_with_valid}")
-        print(f"  Targets marked unreachable: {len(results.unreachable)}")
+        print(f"  Targets marked unreachable: {len(results.permanently_unreachable)}")
         print(f"  Misconfigured targets: {len(results.misconfigured)}")
         
         suspicious_count = sum(len(v) for v in results.suspicious.values())
@@ -287,16 +307,16 @@ class OutputHandler:
                 print(f"  {self.c.RED}✗{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} {self.c.GRAY}(tested {count} ID{'s' if count > 1 else ''} before detection){self.c.RESET}")
         
         # Unreachable targets
-        if results.unreachable:
-            print(f"\n{self.c.RED}Unreachable Targets: {len(results.unreachable)}{self.c.RESET}")
-            for target in results.unreachable:
+        if results.permanently_unreachable:
+            print(f"\n{self.c.RED}Unreachable Targets: {len(results.permanently_unreachable)}{self.c.RESET}")
+            for target in results.permanently_unreachable:
                 print(f"  {self.c.RED}✗{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} {self.c.GRAY}(timeout/unreachable){self.c.RESET}")
         
         print(f"\n{self.c.BOLD}Output Files:{self.c.RESET}")
         print(f"  All tests: {self.c.CYAN}{self.session_dir}/phase1_full_log.txt{self.c.RESET}")
         if results.valid or results.suspicious:
             print(f"  Valid results: {self.c.GREEN}{self.session_dir}/valid_results.txt{self.c.RESET}")
-        if results.false_positives or results.errors or results.unreachable:
+        if results.false_positives or results.errors or results.permanently_unreachable:
             print(f"  Errors/Misconfigured: {self.c.RED}{self.session_dir}/errors_and_misconfigured.txt{self.c.RESET}")
     
     def display_phase2_commands(self, results, port):

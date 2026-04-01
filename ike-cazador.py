@@ -140,7 +140,7 @@ Default wordlist: wordlists/group-id-wordlist.txt (450 Group IDs)
     parser.add_argument(
         '--version',
         action='version',
-        version='%(prog)s 1.2.1'
+        version='%(prog)s 1.3.0'
     )
     
     args = parser.parse_args()
