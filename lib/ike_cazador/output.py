@@ -30,17 +30,44 @@ class OutputHandler:
         self.valid_results_log.close()
         self.error_log.close()
     
+    def _pad_line(self, text, width=70):
+        """Pad text to exact width for box alignment"""
+        # Remove color codes for length calculation
+        visible_text = text
+        for color in [self.c.CYAN, self.c.GREEN, self.c.RED, self.c.YELLOW, self.c.PURPLE, 
+                      self.c.BOLD, self.c.RESET, self.c.GRAY]:
+            visible_text = visible_text.replace(color, '')
+        
+        visible_len = len(visible_text)
+        padding_needed = width - visible_len
+        return text + (' ' * padding_needed)
+    
+    def _draw_validation_box(self, lines):
+        """Draw Unicode box around validation output"""
+        width = 70
+        
+        # Top border
+        print(f"{self.c.PURPLE}╔{'═' * width}╗{self.c.RESET}")
+        
+        # Content lines
+        for line in lines:
+            padded = self._pad_line(line, width)
+            print(f"{self.c.PURPLE}║{self.c.RESET}{padded}{self.c.PURPLE}║{self.c.RESET}")
+        
+        # Bottom border
+        print(f"{self.c.PURPLE}╚{'═' * width}╝{self.c.RESET}")
+    
     def display_banner(self):
         """Display ASCII banner"""
         banner = f"""{self.c.PURPLE}{self.c.BOLD}═══════════════════════════════════════════════════════════
   IKE-CAZADOR | VPN Group ID Discovery Tool
-  Version 1.1.2 | IKE Aggressive Mode Enumeration
+  Version 1.2.0 | IKE Aggressive Mode Enumeration
 ═══════════════════════════════════════════════════════════{self.c.RESET}
 """
         print(banner)
     
     def display_config(self, config):
-        """Display scan configuration"""
+        """Display scan configuration with concurrency details"""
         if self.quiet:
             return
         
@@ -53,8 +80,12 @@ class OutputHandler:
         else:
             print(f"  Mode: Sequential")
         
+        # Display concurrency settings
+        max_per_target = 1 if config.jitter_enabled else 2
+        print(f"  Concurrency: {max_per_target} requests/target, 20 global max")
+        
         if config.jitter_enabled:
-            print(f"  Jitter: Enabled (500ms ±200ms)")
+            print(f"  Jitter: Enabled (0.5-1.5s variable delay)")
         else:
             print(f"  Jitter: Disabled")
         
@@ -86,47 +117,60 @@ class OutputHandler:
         print(msg)
     
     def display_validation_start(self, target, group_id):
-        """Display validation module start"""
-        msg = f"{self.c.PURPLE}{self.c.BOLD}[*] Validation module starting (5 tests, ~50 seconds)...{self.c.RESET}"
-        print(msg)
+        """Display validation module start with Unicode box"""
+        lines = [
+            f" {self.c.BOLD}VALIDATION MODULE - {self.c.CYAN}{target}{self.c.RESET}{self.c.BOLD} + \"{self.c.CYAN}{group_id}{self.c.RESET}{self.c.BOLD}\"{self.c.RESET}",
+            ""
+        ]
+        
+        # Header with separator
+        print()
+        print(f"{self.c.PURPLE}╔{'═' * 70}╗{self.c.RESET}")
+        for line in lines:
+            padded = self._pad_line(line, 70)
+            print(f"{self.c.PURPLE}║{self.c.RESET}{padded}{self.c.PURPLE}║{self.c.RESET}")
+        print(f"{self.c.PURPLE}╠{'═' * 70}╣{self.c.RESET}")
     
-    def display_validation_test(self, num, total, test_id, target):
-        """Display each validation test"""
-        print(f"    [{num}/{total}] Testing {self.c.CYAN}\"{test_id}\"{self.c.RESET} against {self.c.CYAN}{target}{self.c.RESET}")
+    def display_validation_test_inline(self, num, total, test_id, is_valid):
+        """Display inline validation test result"""
+        expected_text = "(expected)" if not is_valid else "(unexpected!)"
+        status_symbol = f"{self.c.GREEN}✓{self.c.RESET}" if not is_valid else f"{self.c.RED}✗{self.c.RESET}"
+        status_text = "INVALID" if not is_valid else "VALID"
+        
+        line = f" [{num}/{total}] {test_id} → {status_text} {status_symbol} {expected_text}"
+        padded = self._pad_line(line, 70)
+        print(f"{self.c.PURPLE}║{self.c.RESET}{padded}{self.c.PURPLE}║{self.c.RESET}")
     
-    def display_validation_test_result(self, test_id, valid):
-        """Display result of validation test"""
-        if valid:
-            print(f"          Result: VALID {self.c.RED}✗{self.c.RESET} (unexpected!)")
-        else:
-            print(f"          Result: INVALID {self.c.GREEN}✓{self.c.RESET}")
+    def display_validation_end(self):
+        """Display end of validation box"""
+        print(f"{self.c.PURPLE}╚{'═' * 70}╝{self.c.RESET}")
     
-    def display_validation_passed(self):
-        """Display validation passed"""
-        print(f"\n{self.c.GREEN}✓ VALIDATION PASSED{self.c.RESET}")
-    
-    def display_validation_failed(self, valid_count, total):
-        """Display validation failed (false positive)"""
-        print(f"\n{self.c.RED}[!] VALIDATION FAILED: {valid_count}/{total} random IDs succeeded{self.c.RESET}")
-    
-    def display_validation_suspicious(self, valid_count, total):
-        """Display validation suspicious"""
-        print(f"\n{self.c.YELLOW}[!] VALIDATION SUSPICIOUS: {valid_count}/{total} random IDs succeeded{self.c.RESET}")
+    def display_validation_verdict(self, verdict, target, valid_count=0, total=5):
+        """Display validation verdict with action"""
+        if verdict == 'TRUE_POSITIVE':
+            print(f"\n{self.c.GREEN}[✓] VERDICT: TRUE POSITIVE{self.c.RESET}")
+            print(f"{self.c.GREEN}[→]{self.c.RESET} Action: Continuing tests to find additional valid Group IDs")
+        elif verdict == 'FALSE_POSITIVE':
+            print(f"\n{self.c.RED}[✗] VERDICT: FALSE POSITIVE{self.c.RESET} ({valid_count}/{total} random IDs succeeded)")
+            print(f"{self.c.RED}[→]{self.c.RESET} Action: Target {self.c.CYAN}{target}{self.c.RESET} EXCLUDED from remaining tests")
+        elif verdict == 'SUSPICIOUS':
+            print(f"\n{self.c.YELLOW}[⚠] VERDICT: SUSPICIOUS{self.c.RESET} ({valid_count}/{total} random IDs succeeded)")
+            print(f"{self.c.YELLOW}[→]{self.c.RESET} Action: Manual review recommended - continuing tests")
     
     def display_true_positive(self, target, group_id):
         """Display confirmed true positive"""
-        msg = f"{self.c.GREEN}[+]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} + {self.c.CYAN}\"{group_id}\"{self.c.RESET} → TRUE POSITIVE (validated)"
-        print(msg)
+        # Verdict already displayed by display_validation_verdict
+        pass
     
     def display_false_positive(self, target, group_id):
         """Display false positive"""
-        msg = f"{self.c.RED}[!]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} + {self.c.CYAN}\"{group_id}\"{self.c.RESET} → FALSE POSITIVE (misconfigured VPN)"
-        print(msg)
+        # Verdict already displayed by display_validation_verdict
+        pass
     
     def display_suspicious(self, target, group_id):
         """Display suspicious result"""
-        msg = f"{self.c.YELLOW}[!]{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} + {self.c.CYAN}\"{group_id}\"{self.c.RESET} → SUSPICIOUS (manual verification recommended)"
-        print(msg)
+        # Verdict already displayed by display_validation_verdict
+        pass
     
     def display_unreachable(self, target):
         """Display target unreachable"""
@@ -194,24 +238,43 @@ class OutputHandler:
         self.error_log.write("=" * 80 + "\n")
         self.error_log.flush()
     
-    def display_phase1_summary(self, results, scan_time):
-        """Display Phase 1 summary"""
+    def display_phase1_summary(self, results, scan_time, total_requests, validation_count=0):
+        """Display Phase 1 summary with statistics"""
         print(f"\n\n{self.c.PURPLE}{self.c.BOLD}═══════════════════════════════════════════════════════════")
         print(f"Phase 1 Complete")
         print(f"═══════════════════════════════════════════════════════════{self.c.RESET}\n")
         
         print(f"Scan time: {format_time(scan_time)}")
         
+        # Statistics section
+        print(f"\n{self.c.BOLD}Scan Statistics:{self.c.RESET}")
+        print(f"  Total tests: {total_requests:,}")
+        
+        valid_count = sum(len(v) for v in results.valid.values())
+        print(f"  Valid Group IDs found: {valid_count}")
+        print(f"  Validations performed: {validation_count}")
+        
+        targets_with_valid = len(results.valid)
+        print(f"  Targets with valid Group IDs: {targets_with_valid}")
+        print(f"  Targets marked unreachable: {len(results.unreachable)}")
+        print(f"  Misconfigured targets: {len(results.misconfigured)}")
+        
+        suspicious_count = sum(len(v) for v in results.suspicious.values())
+        print(f"  Suspicious results: {suspicious_count}")
+        
+        error_count = sum(len(v) for v in results.errors.values())
+        print(f"  Total errors/timeouts: {error_count}")
+        
         # Valid Group IDs
         if results.valid:
-            print(f"\n{self.c.GREEN}Valid Group IDs: {sum(len(v) for v in results.valid.values())}{self.c.RESET}")
+            print(f"\n{self.c.GREEN}Valid Group IDs: {valid_count}{self.c.RESET}")
             for target, group_ids in results.valid.items():
                 for group_id, _ in group_ids:
                     print(f"  {self.c.GREEN}✓{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} : {group_id}")
         
         # Suspicious results
         if results.suspicious:
-            print(f"\n{self.c.YELLOW}Suspicious Results: {sum(len(v) for v in results.suspicious.values())}{self.c.RESET}")
+            print(f"\n{self.c.YELLOW}Suspicious Results: {suspicious_count}{self.c.RESET}")
             for target, group_ids in results.suspicious.items():
                 for group_id in group_ids:
                     print(f"  {self.c.YELLOW}⚠{self.c.RESET} {self.c.CYAN}{target}{self.c.RESET} : {group_id} {self.c.GRAY}(manual verification needed){self.c.RESET}")

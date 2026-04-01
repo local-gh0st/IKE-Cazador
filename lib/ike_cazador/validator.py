@@ -84,7 +84,7 @@ class Validator:
     
     async def validate_async(self, target, suspected_group_id, config):
         """
-        Async version: Validate a suspected valid Group ID with parallel tests
+        Async version: Validate a suspected valid Group ID with SEQUENTIAL tests
         
         Returns:
             'TRUE_POSITIVE', 'FALSE_POSITIVE', or 'SUSPICIOUS'
@@ -94,44 +94,39 @@ class Validator:
         # Generate random test IDs
         test_ids = self._generate_test_ids(suspected_group_id, self.num_tests)
         
-        # Fire all 5 validation tests in parallel (5x speedup!)
-        tasks = []
+        valid_count = 0
+        
+        # Execute tests SEQUENTIALLY with verbose output
         for i, test_id in enumerate(test_ids, 1):
-            self.output.display_validation_test(i, self.num_tests, test_id, target)
-            tasks.append(self._test_single_validation_async(target, test_id, config, i))
+            result = await self.ike_tester.test_group_id_async(
+                target,
+                test_id,
+                port=config.port
+            )
+            
+            # Log validation test
+            self.output.log_test(target, test_id, result)
+            
+            is_valid = result.status == 'VALID'
+            if is_valid:
+                valid_count += 1
+            
+            # Display inline result immediately
+            self.output.display_validation_test_inline(i, self.num_tests, test_id, is_valid)
         
-        # Wait for all tests to complete
-        results = await asyncio.gather(*tasks)
+        # Close validation box
+        self.output.display_validation_end()
         
-        # Count valid responses
-        valid_count = sum(1 for is_valid in results if is_valid)
-        
-        # Determine confidence
+        # Determine verdict
         if valid_count >= self.fp_threshold:
             # 3+ random IDs succeeded = false positive
-            self.output.display_validation_failed(valid_count, self.num_tests)
-            return 'FALSE_POSITIVE'
+            verdict = 'FALSE_POSITIVE'
         elif valid_count >= self.suspicious_threshold:
             # 2 random IDs succeeded = suspicious
-            self.output.display_validation_suspicious(valid_count, self.num_tests)
-            return 'SUSPICIOUS'
+            verdict = 'SUSPICIOUS'
         else:
             # 0-1 random IDs succeeded = true positive
-            self.output.display_validation_passed()
-            return 'TRUE_POSITIVE'
-    
-    async def _test_single_validation_async(self, target, test_id, config, test_num):
-        """Test a single validation ID asynchronously"""
-        result = await self.ike_tester.test_group_id_async(
-            target,
-            test_id,
-            port=config.port
-        )
+            verdict = 'TRUE_POSITIVE'
         
-        # Log validation test
-        self.output.log_test(target, test_id, result)
-        
-        is_valid = result.status == 'VALID'
-        self.output.display_validation_test_result(test_id, valid=is_valid)
-        
-        return is_valid
+        self.output.display_validation_verdict(verdict, target, valid_count, self.num_tests)
+        return verdict

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 IKE-CAZADOR - VPN Group ID Discovery Tool
-Version 1.1.1
+Version 1.2.0
 
 Discovers valid VPN Group IDs through IKE Aggressive Mode enumeration
 with robust false positive detection.
@@ -166,8 +166,13 @@ def run_phase1(config, ike_tester, output):
     results = scanner.scan(config.targets, config.wordlist)
     scan_time = time.time() - start_time
     
-    # Display summary
-    output.display_phase1_summary(results, scan_time)
+    # Display summary with validation count
+    output.display_phase1_summary(
+        results, 
+        scan_time, 
+        scanner.total_requests,
+        scanner.validation_count
+    )
     
     return results
 

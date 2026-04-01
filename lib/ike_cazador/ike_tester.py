@@ -6,6 +6,9 @@ import subprocess
 import asyncio
 import re
 import shutil
+import tempfile
+import os
+import uuid
 
 
 class IKEResult:
@@ -45,6 +48,11 @@ class IKETester:
             )
         return path
     
+    def _sanitize_for_filename(self, text):
+        """Sanitize text for safe use in filenames"""
+        # Replace problematic characters with underscores
+        return text.replace('.', '_').replace(':', '_').replace('/', '_').replace('\\', '_')
+    
     def test_group_id(self, target, group_id, port=500):
         """
         Test a single Group ID against a target
@@ -66,44 +74,104 @@ class IKETester:
         return self._parse_output(output, status)
     
     def _execute_ike_scan(self, target, group_id, port):
-        """Execute ike-scan subprocess with timeout (Phase 1)"""
+        """Execute ike-scan subprocess with timeout (Phase 1) using temp file"""
         cmd = ['ike-scan', '-M', '-A', f'--id={group_id}']
         if port != 500:
             cmd.extend(['--dport', str(port)])
         cmd.append(target)
         
+        # Create unique temp file for synchronous execution
+        safe_target = self._sanitize_for_filename(target)
+        safe_group_id = self._sanitize_for_filename(group_id)
+        unique_id = uuid.uuid4().hex[:8]
+        
+        temp_file = None
+        temp_path = None
+        
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=self.timeout,
-                text=True
+            temp_file = tempfile.NamedTemporaryFile(
+                mode='w+',
+                prefix=f'ike_scan_{safe_target}_{safe_group_id}_{unique_id}_',
+                suffix='.txt',
+                delete=False
             )
-            return result.stdout, result.returncode
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            with open(temp_path, 'w') as outfile:
+                result = subprocess.run(
+                    cmd,
+                    stdout=outfile,
+                    stderr=subprocess.PIPE,
+                    timeout=self.timeout,
+                    text=True
+                )
+                
+                with open(temp_path, 'r') as infile:
+                    stdout = infile.read()
+                
+                return stdout, result.returncode
+                
         except subprocess.TimeoutExpired:
             return None, 'TIMEOUT'
         except Exception as e:
             return None, f'ERROR: {str(e)}'
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
     
     def _execute_ike_scan_with_psk(self, target, group_id, port):
-        """Execute ike-scan with -P flag for PSK capture (Phase 2)"""
+        """Execute ike-scan with -P flag for PSK capture (Phase 2) using temp file"""
         cmd = ['ike-scan', '-M', '-A', f'--id={group_id}', '-P']
         if port != 500:
             cmd.extend(['--dport', str(port)])
         cmd.append(target)
         
+        # Create unique temp file
+        safe_target = self._sanitize_for_filename(target)
+        safe_group_id = self._sanitize_for_filename(group_id)
+        unique_id = uuid.uuid4().hex[:8]
+        
+        temp_file = None
+        temp_path = None
+        
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                timeout=self.timeout,
-                text=True
+            temp_file = tempfile.NamedTemporaryFile(
+                mode='w+',
+                prefix=f'ike_scan_psk_{safe_target}_{safe_group_id}_{unique_id}_',
+                suffix='.txt',
+                delete=False
             )
-            return result.stdout, result.returncode
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            with open(temp_path, 'w') as outfile:
+                result = subprocess.run(
+                    cmd,
+                    stdout=outfile,
+                    stderr=subprocess.PIPE,
+                    timeout=self.timeout,
+                    text=True
+                )
+                
+                with open(temp_path, 'r') as infile:
+                    stdout = infile.read()
+                
+                return stdout, result.returncode
+                
         except subprocess.TimeoutExpired:
             return None, 'TIMEOUT'
         except Exception as e:
             return None, f'ERROR: {str(e)}'
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
     
     def _parse_output(self, output, status):
         """Parse ike-scan output to determine validity and extract details"""
@@ -188,29 +256,63 @@ class IKETester:
         return self._parse_output(output, status)
     
     async def _execute_ike_scan_async(self, target, group_id, port):
-        """Execute ike-scan subprocess asynchronously with timeout"""
+        """Execute ike-scan subprocess asynchronously with timeout using temp file"""
         cmd = [self.ike_scan_path, '-M', '-A', f'--id={group_id}']
         if port != 500:
             cmd.extend(['--dport', str(port)])
         cmd.append(target)
         
+        # Create unique temp file to isolate stdout from concurrent processes
+        safe_target = self._sanitize_for_filename(target)
+        safe_group_id = self._sanitize_for_filename(group_id)
+        unique_id = uuid.uuid4().hex[:8]
+        
+        temp_file = None
+        temp_path = None
+        
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            # Create temp file with descriptive name for debugging
+            temp_file = tempfile.NamedTemporaryFile(
+                mode='w+',
+                prefix=f'ike_scan_{safe_target}_{safe_group_id}_{unique_id}_',
+                suffix='.txt',
+                delete=False
             )
+            temp_path = temp_file.name
+            temp_file.close()  # Close so subprocess can write to it
             
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(),
-                    timeout=self.timeout
+            # Open temp file for subprocess to write stdout
+            with open(temp_path, 'w') as outfile:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=outfile,
+                    stderr=asyncio.subprocess.PIPE
                 )
-                return stdout.decode('utf-8', errors='ignore'), proc.returncode
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                return None, 'TIMEOUT'
                 
+                try:
+                    _, stderr = await asyncio.wait_for(
+                        proc.communicate(),
+                        timeout=self.timeout
+                    )
+                    
+                    # Read output from temp file after process completes
+                    with open(temp_path, 'r') as infile:
+                        stdout = infile.read()
+                    
+                    return stdout, proc.returncode
+                    
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    return None, 'TIMEOUT'
+                    
         except Exception as e:
             return None, f'ERROR: {str(e)}'
+        
+        finally:
+            # Clean up temp file
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass  # Non-critical if cleanup fails

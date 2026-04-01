@@ -79,7 +79,22 @@ class Scanner:
         self.start_time = None
         self.completed_requests = 0
         self.total_requests = 0
+        self.validation_count = 0  # Track number of validations performed
         self.progress_lock = asyncio.Lock()  # Thread-safe progress updates
+        self.validation_in_progress = False  # Flag to pause status bar during validation
+        
+        # Two-level concurrency control
+        self.target_semaphores = {}  # {target: Semaphore(max_per_target)}
+        self.global_semaphore = asyncio.Semaphore(20)  # Global limit to prevent system overload
+        
+        # Per-target concurrency: 1 if jitter enabled (stealth), 2 otherwise (safe)
+        self.max_per_target = 1 if config.jitter_enabled else 2
+    
+    def _get_target_semaphore(self, target):
+        """Get or create semaphore for target"""
+        if target not in self.target_semaphores:
+            self.target_semaphores[target] = asyncio.Semaphore(self.max_per_target)
+        return self.target_semaphores[target]
     
     def scan(self, targets, wordlist):
         """
@@ -208,7 +223,7 @@ class Scanner:
         # INVALID results are just logged, no action needed
     
     async def _test_and_validate_async(self, target, group_id, results):
-        """Async version: Test a single target+group_id combination"""
+        """Async version: Test a single target+group_id combination with safe concurrency"""
         
         # Skip if target already marked unreachable or misconfigured
         if results.is_unreachable(target) or results.is_misconfigured(target):
@@ -225,12 +240,16 @@ class Scanner:
             self.completed_requests += 1
             self._display_progress(current_target=target, current_id=group_id)
         
-        # Execute ike-scan test (async)
-        result = await self.ike_tester.test_group_id_async(
-            target, 
-            group_id, 
-            port=self.config.port
-        )
+        # Two-level concurrency control: per-target AND global limits
+        target_semaphore = self._get_target_semaphore(target)
+        async with target_semaphore:
+            async with self.global_semaphore:
+                # Execute ike-scan test (async)
+                result = await self.ike_tester.test_group_id_async(
+                    target, 
+                    group_id, 
+                    port=self.config.port
+                )
         
         # Log to file
         self.output.log_test(target, group_id, result)
@@ -283,23 +302,22 @@ class Scanner:
     
     def _apply_jitter(self):
         """Apply randomized delay for stealth"""
-        # Base delay: 500ms, Jitter: ±200ms (300-700ms range)
-        base_delay = 0.5
-        jitter = random.uniform(-0.2, 0.2)
-        actual_delay = base_delay + jitter
+        # Variable delay: 0.5-1.5 seconds
+        actual_delay = random.uniform(0.5, 1.5)
         time.sleep(actual_delay)
     
     async def _apply_jitter_async(self):
         """Async version: Apply randomized delay for stealth"""
-        # Base delay: 500ms, Jitter: ±200ms (300-700ms range)
-        base_delay = 0.5
-        jitter = random.uniform(-0.2, 0.2)
-        actual_delay = base_delay + jitter
+        # Variable delay: 0.5-1.5 seconds
+        actual_delay = random.uniform(0.5, 1.5)
         await asyncio.sleep(actual_delay)
     
     async def _handle_valid_result_async(self, target, group_id, result, results):
         """Async version: Handle potential valid Group ID"""
         self.output.display_potential_valid(target, group_id)
+        
+        # Increment validation count
+        self.validation_count += 1
         
         # Run validation module (async)
         validation_result = await self.validator.validate_async(
