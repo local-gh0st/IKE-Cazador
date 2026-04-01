@@ -269,6 +269,7 @@ class IKETester:
         
         temp_file = None
         temp_path = None
+        fd = None
         
         try:
             # Create temp file with descriptive name for debugging
@@ -281,11 +282,13 @@ class IKETester:
             temp_path = temp_file.name
             temp_file.close()  # Close so subprocess can write to it
             
-            # Open temp file for subprocess to write stdout
-            with open(temp_path, 'w') as outfile:
+            # Open temp file using low-level file descriptor for async subprocess
+            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+            
+            try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
-                    stdout=outfile,
+                    stdout=fd,  # Pass integer file descriptor
                     stderr=asyncio.subprocess.PIPE
                 )
                 
@@ -295,21 +298,38 @@ class IKETester:
                         timeout=self.timeout
                     )
                     
-                    # Read output from temp file after process completes
-                    with open(temp_path, 'r') as infile:
-                        stdout = infile.read()
+                finally:
+                    # Close file descriptor before reading
+                    if fd is not None:
+                        os.close(fd)
+                        fd = None
+                
+                # Read output from temp file after process completes
+                with open(temp_path, 'r') as infile:
+                    stdout = infile.read()
+                
+                # Verify output was captured
+                if not stdout or stdout.strip() == '':
+                    return None, f'ERROR: No output captured from ike-scan'
+                
+                return stdout, proc.returncode
                     
-                    return stdout, proc.returncode
-                    
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    return None, 'TIMEOUT'
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                return None, 'TIMEOUT'
                     
         except Exception as e:
             return None, f'ERROR: {str(e)}'
         
         finally:
+            # Ensure file descriptor is closed
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except:
+                    pass
+            
             # Clean up temp file
             if temp_path and os.path.exists(temp_path):
                 try:

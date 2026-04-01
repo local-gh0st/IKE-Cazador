@@ -1,0 +1,10 @@
+admin
+administrator
+vpn
+remote
+default
+guest
+users
+anyconnect
+cisco
+sslvpn
