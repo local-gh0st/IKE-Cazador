@@ -3,6 +3,11 @@ captures/
 *.pyc
 __pycache__/
 
+# Local target lists (user-specific)
+targets.txt
+qualified-targets.txt
+prequalification-stats.txt
+
 # Environment
 venv/
 .env
