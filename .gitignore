@@ -1,0 +1,17 @@
+ike-cazador-results/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+.env
+.venv/
+venv/
+.DS_Store
+.idea/
+*.swp
+*.swo
+Thumbs.db
