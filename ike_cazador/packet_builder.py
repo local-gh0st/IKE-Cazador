@@ -234,6 +234,13 @@ def build_am1(
 
     raw_am1 = header + payload_chain
 
+    # RFC 3947 NAT-T encapsulation: IKE traffic on port 4500 must be prefixed
+    # with a 4-byte non-ESP marker (0x00000000) to distinguish IKE packets from
+    # ESP data packets that share the same port.  Without this marker, devices
+    # running NAT-T silently drop the probe as an unrecognised packet type.
+    if target_port != 500:
+        raw_am1 = b'\x00\x00\x00\x00' + raw_am1
+
     return ProbeMetadata(
         target_ip=target_ip,
         target_port=target_port,
@@ -247,7 +254,7 @@ def build_am1(
     )
 
 
-def build_delete_packet(cky_i: bytes, cky_r: bytes) -> bytes:
+def build_delete_packet(cky_i: bytes, cky_r: bytes, target_port: int = 500) -> bytes:
     """
     Build an unencrypted ISAKMP Informational/DELETE packet to clean up
     a half-open SA on the target device after AM2 capture.
@@ -265,13 +272,10 @@ def build_delete_packet(cky_i: bytes, cky_r: bytes) -> bytes:
 
     delete_body = doi + protocol + spi_size + num_spis + spi
     delete_len  = len(delete_body) + 4
-    # next=0 (last payload), type=DELETE handled in ISAKMP header
     delete_header = struct.pack('!BBH', 0, 0, delete_len)
     delete_payload = delete_header + delete_body
 
     total_len = ISAKMP_HEADER_LEN + len(delete_payload)
-
-    # Use a fresh msg_id (non-zero for Informational)
     msg_id = int.from_bytes(os.urandom(4), 'big')
 
     header = (cky_i + cky_r +
@@ -283,7 +287,13 @@ def build_delete_packet(cky_i: bytes, cky_r: bytes) -> bytes:
                           msg_id) +
               struct.pack('!I', total_len))
 
-    return header + delete_payload
+    pkt = header + delete_payload
+
+    # NAT-T: prefix non-ESP marker on port 4500
+    if target_port != 500:
+        pkt = b'\x00\x00\x00\x00' + pkt
+
+    return pkt
 
 
 def generate_nonce(size: int = 20) -> bytes:

@@ -1541,7 +1541,12 @@ class Scanner:
     # -----------------------------------------------------------------------
 
     def _setup_socket(self) -> None:
-        """Create and configure the UDP socket bound to source port 500."""
+        """Create and configure the UDP socket bound to source port matching target port.
+
+        IKE protocol (RFC 2409): source port must equal destination port.
+        Port 500 for standard IKE, port 4500 for NAT-T.  Binding to the wrong
+        source port causes devices to silently drop the probe.
+        """
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
@@ -1554,7 +1559,8 @@ class Scanner:
             except Exception as e:
                 self.output.log_warning(f'Failed to bind to interface {self.interface}: {e}')
 
-        self._sock.bind(('0.0.0.0', IKE_PORT))
+        # Bind source port to match the target port (IKE requires src==dst port)
+        self._sock.bind(('0.0.0.0', self.port))
         self._sock.setblocking(False)
 
         # Enable ICMP error reporting on the UDP socket.
@@ -1584,7 +1590,7 @@ class Scanner:
         except Exception as e:
             self.output.log_warning(f'IP_PMTUDISC_DO not available: {e}')
 
-        self.output.log_info(f'Socket bound to 0.0.0.0:{IKE_PORT}')
+        self.output.log_info(f'Socket bound to 0.0.0.0:{self.port}')
 
     def _poll_icmp_errors(self, target_ip: str) -> Optional[tuple[int, int]]:
         """
@@ -1845,7 +1851,7 @@ class Scanner:
         """Send an ISAKMP Informational DELETE to clean up a half-open SA."""
         try:
             loop        = asyncio.get_event_loop()
-            delete_pkt  = build_delete_packet(cky_i, cky_r)
+            delete_pkt  = build_delete_packet(cky_i, cky_r, target_port=port)
             await loop.sock_sendto(self._sock, delete_pkt, (ip, port))
             self.output.log_debug(
                 f'[Cleanup] DELETE sent to {ip} for SA '

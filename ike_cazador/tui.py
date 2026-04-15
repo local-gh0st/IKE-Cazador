@@ -278,7 +278,8 @@ class TUI:
             elif ts.p1_status == HostStatus.UNKNOWN:
                 detail = 'All 8 DH groups exhausted — transform unknown'
             elif ts.p1_status == HostStatus.NO_RESPONSE:
-                detail = 'No IKE response on port 500'
+                # Use ts.p1_detail which contains the correct port number from scanner
+                detail = ts.p1_detail or 'No IKE response'
             elif ts.p1_status == HostStatus.FIREWALL_FILTERED:
                 detail = 'ICMP admin-prohibited — return path firewall-filtered (REJECT rule)'
             else:

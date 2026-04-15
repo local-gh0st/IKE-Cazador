@@ -93,7 +93,7 @@ _fragment_buffer: dict[tuple, list] = {}
 def parse_response(raw: bytes, sent_cky_i: bytes,
                    src_ip: str = '') -> ParsedResponse:
     """
-    Main entry point. Parse a raw UDP payload received on port 500.
+    Main entry point. Parse a raw UDP payload received on port 500 or 4500.
 
     Args:
         raw:        raw bytes from recvfrom()
@@ -106,6 +106,12 @@ def parse_response(raw: bytes, sent_cky_i: bytes,
     # -----------------------------------------------------------------------
     # Layer 0: Raw bytes pre-guards
     # -----------------------------------------------------------------------
+
+    # RFC 3947 NAT-T: responses on port 4500 are prefixed with a 4-byte
+    # non-ESP marker (0x00000000).  Strip it before parsing so the rest of
+    # the pipeline sees a standard ISAKMP packet regardless of port.
+    if len(raw) >= 4 and raw[:4] == b'\x00\x00\x00\x00':
+        raw = raw[4:]
     if len(raw) < ISAKMP_HEADER_LEN:
         return ParsedResponse(
             response_type=ResponseType.TRUNCATED,
