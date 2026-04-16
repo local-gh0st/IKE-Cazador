@@ -25,11 +25,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='ike-cazador',
         description="""Notify Messages Cheat Sheet:
-  Notify-7   INVALID_EXCHANGE_TYPE      AM not supported on this device
-  Notify-14  NO_PROPOSAL_CHOSEN         Transform not accepted by device
-  Notify-18  INVALID_ID_INFORMATION     Transform accepted, group ID not found (smoking gun for AM)
-  Notify-24  AUTHENTICATION_FAILED      Group and transform OK, auth failed. Likely: Bad source IP or requires cert/RSA auth
-  Notify-29  UNSUPPORTED_EXCHANGE_TYPE  AM explicitly disabled
+
+  Responses that CONFIRM AM is enabled:
+  Notify-14  NO_PROPOSAL_CHOSEN         AM running, transform not matched
+  Notify-18  INVALID_ID_INFORMATION     AM confirmed, transform accepted, group not found (smoking gun)
+  Notify-24  AUTHENTICATION_FAILED      AM confirmed, auth failed — bad source IP or cert/RSA auth
+  Handshake  Aggressive Mode returned   AM confirmed, PSK hash capturable
+
+  Responses indicating AM is DISABLED:
+  Notify-5   INVALID_MAJOR_VERSION      IKEv1 not supported on this device
+  Notify-7   INVALID_EXCHANGE_TYPE      AM explicitly disabled on this device
+  Notify-29  UNSUPPORTED_EXCHANGE_TYPE  AM not supported on this device
+  Silence    No response                Inconclusive — offline, firewalled, or rate-limited
 
 IKE Aggressive Mode discovery and PSK hash capture tool""",
         formatter_class=argparse.RawDescriptionHelpFormatter,

@@ -553,13 +553,17 @@ class OutputManager:
             # AM confirmation commands — one per aggressive host
             # Users can run these to collect client-deliverable evidence
             lines.append('--- ike-scan AM Confirmation Commands ---')
-            lines.append('# Run these to confirm IKE Aggressive Mode is enabled.')
-            lines.append('# Expected responses that CONFIRM the finding:')
-            lines.append('#   Notify-14 (NO-PROPOSAL-CHOSEN)     = AM enabled')
-            lines.append('#   Notify-18 (INVALID-ID-INFORMATION)  = AM enabled, transform confirmed')
-            lines.append('#   Notify-24 (AUTHENTICATION-FAILED)   = AM enabled, transform confirmed')
-            lines.append('#   Aggressive Mode Handshake returned  = AM enabled, hash capturable')
-            lines.append('# Notify-29 (UNSUPPORTED-EXCHANGE-TYPE) = AM disabled.')
+            lines.append('# Run these to confirm IKE Aggressive Mode is enabled on each host.')
+            lines.append('# Responses that CONFIRM the finding (AM is enabled):')
+            lines.append('#   Notify-14 (NO-PROPOSAL-CHOSEN)      = AM enabled, transform not matched')
+            lines.append('#   Notify-18 (INVALID-ID-INFORMATION)  = AM enabled, transform accepted, group not found')
+            lines.append('#   Notify-24 (AUTHENTICATION-FAILED)   = AM enabled, auth failed (bad source IP or cert/RSA auth)')
+            lines.append('#   Aggressive Mode Handshake returned   = AM enabled, PSK hash capturable')
+            lines.append('# Responses indicating AM is DISABLED (finding NOT confirmed):')
+            lines.append('#   Notify-5  (INVALID-MAJOR-VERSION)     = IKEv1 not supported on this device')
+            lines.append('#   Notify-7  (INVALID-EXCHANGE-TYPE)     = AM explicitly disabled on this device')
+            lines.append('#   Notify-29 (UNSUPPORTED-EXCHANGE-TYPE) = AM not supported on this device')
+            lines.append('#   No response (silence)                 = inconclusive — device may be offline, firewalled, or rate-limited')
             lines.append('')
             for h in aggressive_hosts:
                 r        = results['phase1'][h]

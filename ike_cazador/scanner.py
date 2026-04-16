@@ -24,7 +24,7 @@ from typing import Optional, Callable, Awaitable
 
 from .constants import (
     DHGroup, DH_PROBE_ORDER, ResponseType, HostStatus, Phase2Status,
-    IKE_PORT, WILDCARD_CAP,
+    IKE_PORT, WILDCARD_CAP, RANDOM_GROUP_PREFIX,
     EncAlg, HashAlg, AuthMethod,
 )
 from .transforms import (
@@ -195,8 +195,7 @@ def derive_zero_capture_reason(ts: 'TargetState') -> str:
     confirmed   = counts.get('CONFIRMED_AM2', 0)
 
     if auth_failed == total:
-        return ('Notify-24: auth failed — source IP may not be a configured '
-                'VPN peer, or cert/RSA auth. PSK capture not achieved.')
+        return 'Notify-24: auth failed — bad source IP or cert/RSA auth'
     if invalid_id == total:
         return 'Notify-18: group not in device config — try a more expansive or customized wordlist'
     if no_proposal == total:
@@ -1392,7 +1391,16 @@ class Scanner:
         # where two concurrent responses from the same wildcard host both pass the
         # cap check before either has been appended to ts.captures.
         wc_state    = self.wildcard_tracker.get_or_create(ts.ip)
-        is_wildcard = wc_state.is_confirmed or ts.wildcard_confirmed
+
+        # A capture with a random-string group ID (gps... prefix) is definitional
+        # proof of wildcard behavior — the device responded to our tool-generated
+        # random string.  Always flag these as wildcard regardless of wc_state,
+        # which may not be updated yet due to async validation timing.
+        if probe_meta.group_id.startswith(RANDOM_GROUP_PREFIX):
+            is_wildcard = True
+        else:
+            is_wildcard = wc_state.is_confirmed or ts.wildcard_confirmed
+
         if is_wildcard and len(ts.captures) >= WILDCARD_CAP:
             self.output.log_debug(
                 f'[Phase2] [{ts.ip}] cap already reached ({len(ts.captures)}) '
@@ -1491,11 +1499,20 @@ class Scanner:
             # Wildcard confirmed
             wc_state.confirm_wildcard()
             ts.wildcard_confirmed = True
-            # Move the original capture to wildcard-flagged/
-            self.output.move_hash_to_wildcard(original_capture)
-            original_capture.is_wildcard = True
+
+            # Move ALL existing captures for this host to wildcard-flagged/.
+            # Not just original_capture — prior wordlist captures (e.g. "vpn", "cisco")
+            # were saved to valid/ before wildcard was confirmed and must be moved.
+            # move_hash_to_wildcard() checks src.exists() so already-moved files are skipped.
+            moved = 0
+            for cap in list(ts.captures):
+                if not cap.is_wildcard:
+                    self.output.move_hash_to_wildcard(cap)
+                    cap.is_wildcard = True
+                    moved += 1
             self.output.log_info(
                 f'[Wildcard] [{ts.ip}] CONFIRMED via random probe "{random_id}" — '
+                f'moved {moved} existing capture(s) to wildcard-flagged/ — '
                 f'confidence={wc_state.confidence_level} ({wc_state.confidence_score}/100)'
             )
             # Log confidence signals
