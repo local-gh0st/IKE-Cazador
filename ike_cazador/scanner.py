@@ -604,7 +604,9 @@ class Scanner:
 
                 # Got a response — record it
                 got_any_bundled_response = True
-                classified = self._classify_phase1_response(result, ts, dh_group)
+                classified = self._classify_phase1_response(
+                    result, ts, dh_group, group_id=random_group_id
+                )
                 if classified:
                     # Definitive result obtained
                     if self.tui_callback:
@@ -673,7 +675,9 @@ class Scanner:
                     if result is None:
                         continue
                     got_any_bundled_response = True
-                    classified = self._classify_phase1_response(result, ts, dh_group)
+                    classified = self._classify_phase1_response(
+                        result, ts, dh_group, group_id=named_group
+                    )
                     if classified:
                         if self.tui_callback:
                             self.tui_callback('p1_update', {'host': ts.ip, 'state': ts})
@@ -792,7 +796,7 @@ class Scanner:
             )
 
             classified = self._classify_phase1_response(
-                result, ts, transform.dh_group
+                result, ts, transform.dh_group, group_id=group_id
             )
             if classified:
                 ts.p1_deep_scanning      = False
@@ -903,28 +907,33 @@ class Scanner:
         return None
 
     def _classify_phase1_response(
-        self, result: ParsedResponse, ts: TargetState, dh_group: DHGroup
+        self, result: ParsedResponse, ts: TargetState,
+        dh_group: DHGroup, group_id: str = ''
     ) -> bool:
         """
         Classify a Phase 1 response. Returns True if definitive result reached.
         Mutates ts.p1_status and ts.locked_transform.
+
+        group_id is passed so the wildcard guard can distinguish random-string
+        probes (gps...) from named-group probes (vpn, cisco, etc.).
+        Only random-string probes confirm wildcard behavior.
         """
         rtype = result.response_type
 
         if rtype == ResponseType.CONFIRMED_AM2:
-            # AM2 received — AM confirmed + transform locked
             ts.p1_status = HostStatus.AGGRESSIVE
             ts.p1_detail = f'AM2 received — {result.message}'
             ts.vendor_str = summarize_vendors(result.vendor_ids)
             ts.idir_b = result.idir_b
             self._lock_transform_from_response(ts, result, dh_group)
 
-            # If this was the random-string probe, flag as wildcard
-            if ts.p1_status == HostStatus.AGGRESSIVE:
+            # Only mark wildcard when the probe used a random-string group ID.
+            # Named-group probes (vpn, cisco, remote) returning AM2 means the
+            # device has that specific group configured — NOT wildcard behavior.
+            if group_id.startswith(RANDOM_GROUP_PREFIX):
                 wc_state = self.wildcard_tracker.get_or_create(ts.ip)
                 wc_state.status = 'CONFIRMED'
                 ts.wildcard_confirmed = True
-                ts.p1_status = HostStatus.AGGRESSIVE  # status stays AGGRESSIVE
 
             return True
 
@@ -997,22 +1006,35 @@ class Scanner:
         """
         Lock in the accepted transform from an AM2 response.
 
-        Matches on enc + dh_group + hash_alg (all three) to uniquely identify
-        which specific transform the device selected from our bundle.
-        Falls back to enc+dh_group only if hash_alg could not be parsed,
-        and falls back to first-in-group if nothing matches.
+        Matches on enc + dh_group + key_len + hash_alg + auth_method.
+        auth_method is critical: without it, XAUTH_PSK (65001) devices get
+        locked to the PSK (1) variant causing Notify-14 in Phase 2.
+
+        Search order:
+        1. TRANSFORMS_BY_GROUP[dh_group] — bundled transforms (PSK variants)
+        2. SINGLE_TRANSFORM_PRIORITY — includes XAUTH and other auth variants
+        3. Fallback to first transform in group
         """
         if response.accepted_enc and response.dh_group:
-            for t in TRANSFORMS_BY_GROUP.get(response.dh_group, []):
+            # Build the combined search list: bundled + single-transform priority
+            candidates = (
+                list(TRANSFORMS_BY_GROUP.get(response.dh_group, [])) +
+                [t for t in SINGLE_TRANSFORM_PRIORITY
+                 if t.dh_group == response.dh_group]
+            )
+            for t in candidates:
                 enc_match  = int(t.enc) == response.accepted_enc
                 dh_match   = int(t.dh_group) == int(response.dh_group)
-                kl_match   = (t.key_len == 0 or t.key_len == (response.accepted_key_len or 0))
+                kl_match   = (t.key_len == 0 or
+                               t.key_len == (response.accepted_key_len or 0))
                 hash_match = (response.accepted_hash_alg is None or
                               int(t.hash_alg) == response.accepted_hash_alg)
+                auth_match = (response.accepted_auth_method is None or
+                              int(t.auth) == response.accepted_auth_method)
 
-                if enc_match and dh_match and kl_match and hash_match:
-                    ts.locked_transform = t
-                    ts.locked_dh_group  = response.dh_group
+                if enc_match and dh_match and kl_match and hash_match and auth_match:
+                    ts.locked_transform    = t
+                    ts.locked_dh_group     = response.dh_group
                     ts.transform_confirmed = True
                     return
 

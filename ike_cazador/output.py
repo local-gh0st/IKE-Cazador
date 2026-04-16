@@ -37,28 +37,26 @@ def _transform_to_ike_scan(transform_str: str) -> tuple:
     Convert our transform string format to ike-scan flag values.
 
     Returns (trans_flag, dhgroup_flag) where:
-      trans_flag    = value for --trans=  e.g. '5,2,1,1'
+      trans_flag    = value for --trans=  e.g. '5,2,1,1' or '7/128,2,65001,2'
       dhgroup_flag  = '--dhgroup=N ' when DH group ≠ 2, else '' (empty)
 
+    Auth codes in ike-scan --trans format:
+      1     = PSK (shared key)
+      65001 = XAUTH_PSK (Cisco Easy VPN / AnyConnect)
+      3     = RSA signatures
+
     ike-scan defaults its KE payload to DH Group 2.  Any other group MUST
-    be specified with --dhgroup=N, otherwise the device receives a G2-sized
-    KE payload inside a transform claiming a different group and rejects
-    with Notify-14 (NO_PROPOSAL_CHOSEN) even though the transform itself
-    is correct.
+    be specified with --dhgroup=N.
 
     Examples:
-      '3DES/SHA1/PSK/G1'      →  ('5,2,1,1',    '--dhgroup=1 ')
-      '3DES/SHA1/PSK/G2'      →  ('5,2,1,2',    '')            ← default, no flag needed
-      'AES256/SHA256/PSK/G14' →  ('7/256,4,1,14','--dhgroup=14 ')
-      'DES/SHA1/PSK/G1'       →  ('1,2,1,1',    '--dhgroup=1 ')
-      'AES128/SHA256/PSK/G14' →  ('7/128,4,1,14','--dhgroup=14 ')
-
-    ike-scan --trans format: enc[/keylen],hash,auth,dh_group
-    Auth is always 1 (PSK) for our captures.
+      '3DES/SHA1/PSK/G1'       →  ('5,2,1,1',       '--dhgroup=1 ')
+      '3DES/SHA1/PSK/G2'       →  ('5,2,1,2',       '')
+      'AES128/SHA1/XAUTH/G2'   →  ('7/128,2,65001,2','')
+      'AES256/SHA256/PSK/G14'  →  ('7/256,4,1,14',  '--dhgroup=14 ')
     """
     try:
         parts = transform_str.split('/')
-        # parts[0]=enc, parts[1]=hash, parts[2]=auth(PSK), parts[3]=G{n}
+        # parts[0]=enc, parts[1]=hash, parts[2]=auth(PSK/XAUTH/RSA), parts[3]=G{n}
         enc_map = {
             'DES':    '1',
             '3DES':   '5',
@@ -73,16 +71,22 @@ def _transform_to_ike_scan(transform_str: str) -> tuple:
             'SHA384': '5',
             'SHA512': '6',
         }
-        enc   = enc_map.get(parts[0], '5')   # default 3DES
-        hash_ = hash_map.get(parts[1], '2')  # default SHA1
-        dh    = parts[3].lstrip('G')          # strip 'G' prefix: G14 → 14
+        auth_map = {
+            'PSK':   '1',
+            'XAUTH': '65001',
+            'RSA':   '3',
+        }
+        enc   = enc_map.get(parts[0], '5')         # default 3DES
+        hash_ = hash_map.get(parts[1], '2')        # default SHA1
+        auth  = auth_map.get(parts[2], '1')        # default PSK
+        dh    = parts[3].lstrip('G')               # strip 'G' prefix: G14 → 14
 
-        trans_flag   = f'{enc},{hash_},1,{dh}'
+        trans_flag   = f'{enc},{hash_},{auth},{dh}'
         # ike-scan KE payload defaults to G2 — explicit flag needed for all other groups
         dhgroup_flag = '' if dh == '2' else f'--dhgroup={dh} '
         return trans_flag, dhgroup_flag
     except Exception:
-        return '5,2,1,2', ''   # safe fallback: 3DES/SHA1/PSK/G2, no dhgroup needed
+        return '5,2,1,2', ''   # safe fallback: 3DES/SHA1/PSK/G2
 
 
 class OutputManager:
@@ -544,6 +548,33 @@ class OutputManager:
             for h in aggressive_hosts:
                 r = results['phase1'][h]
                 lines.append(f'  {h:<20}  {r.get("status",""):<25}  {r.get("transform","")}')
+            lines.append('')
+
+            # AM confirmation commands — one per aggressive host
+            # Users can run these to collect client-deliverable evidence
+            lines.append('--- ike-scan AM Confirmation Commands ---')
+            lines.append('# Run these to confirm IKE Aggressive Mode is enabled.')
+            lines.append('# Expected responses that CONFIRM the finding:')
+            lines.append('#   Notify-14 (NO-PROPOSAL-CHOSEN)     = AM enabled')
+            lines.append('#   Notify-18 (INVALID-ID-INFORMATION)  = AM enabled, transform confirmed')
+            lines.append('#   Notify-24 (AUTHENTICATION-FAILED)   = AM enabled, transform confirmed')
+            lines.append('#   Aggressive Mode Handshake returned  = AM enabled, hash capturable')
+            lines.append('# Notify-29 (UNSUPPORTED-EXCHANGE-TYPE) = AM disabled.')
+            lines.append('')
+            for h in aggressive_hosts:
+                r        = results['phase1'][h]
+                tx_str   = r.get('transform', 'none')
+                if tx_str and tx_str != 'none':
+                    trans, dhgrp = _transform_to_ike_scan(tx_str)
+                    cmd = (f'ike-scan -M -A -n CONFIRM '
+                           f'--trans={trans} {dhgrp}{h}')
+                    lines.append(f'{cmd}  # {tx_str}')
+                else:
+                    # No confirmed transform — omit --trans, ike-scan uses defaults
+                    lines.append(
+                        f'ike-scan -M -A -n CONFIRM {h}'
+                        f'  # transform unconfirmed — any AM response confirms finding'
+                    )
             lines.append('')
 
         lines += [

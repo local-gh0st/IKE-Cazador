@@ -63,6 +63,7 @@ class ParsedResponse:
     accepted_enc:    Optional[int] = None     # encryption alg from accepted transform
     accepted_key_len: Optional[int] = None    # AES key length (0 if not AES)
     accepted_hash_alg: Optional[int] = None  # hash algorithm code from accepted transform
+    accepted_auth_method: Optional[int] = None  # auth method: 1=PSK, 65001=XAUTH_PSK
 
     # Notify fields
     notify_type:     Optional[int] = None
@@ -446,7 +447,7 @@ def _parse_aggressive(p: ISAKMP, cky_i: bytes, cky_r: bytes,
 
     # Determine hash algorithm from hash size
     hash_alg = _hash_alg_from_size(len(hash_r))
-    dh_group, enc_alg, key_len, hash_alg_code = _parse_accepted_transform(sa_bytes)
+    dh_group, enc_alg, key_len, hash_alg_code, auth_code = _parse_accepted_transform(sa_bytes)
 
     return ParsedResponse(
         response_type=ResponseType.CONFIRMED_AM2,
@@ -466,6 +467,7 @@ def _parse_aggressive(p: ISAKMP, cky_i: bytes, cky_r: bytes,
         accepted_enc=enc_alg,
         accepted_key_len=key_len,
         accepted_hash_alg=hash_alg_code,
+        accepted_auth_method=auth_code,
         vendor_ids=vendor_ids,
         raw=raw,
         message=f'Valid AM2 — HASH_R captured ({len(hash_r)} bytes, '
@@ -552,45 +554,36 @@ def _hash_alg_from_size(size: int) -> Optional[HashAlg]:
     return None
 
 
-def _parse_accepted_transform(sa_bytes: bytes) -> tuple[Optional[DHGroup], Optional[int], int, Optional[int]]:
+def _parse_accepted_transform(sa_bytes: bytes) -> tuple:
     """
     Parse the accepted transform from the AM2 SA response payload.
-    Returns (dh_group, enc_alg_code, key_len, hash_alg_code).
+    Returns (dh_group, enc_alg_code, key_len, hash_alg_code, auth_code).
 
-    AM2 SA layout (all offsets from start of sa_bytes):
-      [0:4]   SA generic header:       next(1) res(1) len(2)
-      [4:8]   DOI:                     uint32
-      [8:12]  Situation:               uint32
-      [12:16] Proposal generic header: next(1) res(1) len(2)
-      [16:20] Proposal body header:    num(1) proto(1) spi_size(1) num_transforms(1)
-      [20:24] Transform generic hdr:   next(1) res(1) len(2)   ← transform_len read HERE
-      [24:28] Transform body header:   num(1) id(1) reserved(2)
-      [28:28+attrs] Attributes:        TV or TLV pairs
+    auth_code distinguishes PSK (1) from XAUTH_PSK (65001) and RSA variants.
+    This is critical for correct transform locking — without it, an XAUTH
+    device gets locked to the PSK variant and Phase 2 sends the wrong auth
+    method, receiving Notify-14 for every wordlist word.
     """
     try:
-        TRANSFORM_HDR_OFFSET = 20   # byte offset of transform generic header in sa_bytes
+        TRANSFORM_HDR_OFFSET = 20
 
         if len(sa_bytes) < TRANSFORM_HDR_OFFSET + 4:
-            return None, None, 0, None
+            return None, None, 0, None, None
 
-        # Read transform length from its generic header (offset 20)
         transform_len = struct.unpack(
             '!H', sa_bytes[TRANSFORM_HDR_OFFSET + 2 : TRANSFORM_HDR_OFFSET + 4]
         )[0]
 
-        # Attributes start after: transform generic hdr (4) + transform body hdr (4)
         attr_start = TRANSFORM_HDR_OFFSET + 8
-
-        # Attributes end at: start of transform generic header + transform_len
-        attr_end = TRANSFORM_HDR_OFFSET + transform_len
+        attr_end   = TRANSFORM_HDR_OFFSET + transform_len
 
         if attr_end > len(sa_bytes) or attr_start >= attr_end:
-            return None, None, 0, None
+            return None, None, 0, None, None
 
-        # Parse TV / TLV attribute pairs
         dh_group:      Optional[DHGroup] = None
         enc_alg:       Optional[int]     = None
         hash_alg_code: Optional[int]     = None
+        auth_code:     Optional[int]     = None
         key_len:       int               = 0
         offset = attr_start
 
@@ -600,12 +593,13 @@ def _parse_accepted_transform(sa_bytes: bytes) -> tuple[Optional[DHGroup], Optio
             attr_type = attr_type_raw & 0x7FFF
 
             if is_tv:
-                # TV format: type(2) + value(2) = 4 bytes total
                 attr_val = struct.unpack('!H', sa_bytes[offset+2:offset+4])[0]
                 if attr_type == 1:    # Encryption Algorithm
                     enc_alg = attr_val
                 elif attr_type == 2:  # Hash Algorithm
                     hash_alg_code = attr_val
+                elif attr_type == 3:  # Authentication Method (PSK=1, XAUTH_PSK=65001)
+                    auth_code = attr_val
                 elif attr_type == 4:  # Group Description (DH group)
                     try:
                         dh_group = DHGroup(attr_val)
@@ -615,16 +609,15 @@ def _parse_accepted_transform(sa_bytes: bytes) -> tuple[Optional[DHGroup], Optio
                     key_len = attr_val
                 offset += 4
             else:
-                # TLV format: type(2) + length(2) + value(length) bytes
                 if offset + 4 > len(sa_bytes):
                     break
                 attr_len = struct.unpack('!H', sa_bytes[offset+2:offset+4])[0]
                 offset += 4 + attr_len
 
-        return dh_group, enc_alg, key_len, hash_alg_code
+        return dh_group, enc_alg, key_len, hash_alg_code, auth_code
 
     except (struct.error, IndexError):
-        return None, None, 0, None
+        return None, None, 0, None, None
 
 
 def _handle_cisco_fragment(raw: bytes, cky_i: bytes, cky_r: bytes,
