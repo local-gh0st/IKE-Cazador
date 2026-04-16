@@ -174,7 +174,8 @@ DH_PROBE_ORDER = [
     DHGroup.GROUP_5,    # transitional
     DHGroup.GROUP_19,   # ECP P-256 (modern Cisco/Fortinet)
     DHGroup.GROUP_20,   # ECP P-384 (NSA Suite B)
-    DHGroup.GROUP_15,   # uncommon high-security
+    DHGroup.GROUP_15,   # uncommon high-security (3072-bit)
+    DHGroup.GROUP_16,   # high-security (4096-bit MODP) — defined but was missing
     DHGroup.GROUP_21,   # rare ECP P-521
 ]
 

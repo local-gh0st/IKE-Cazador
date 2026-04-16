@@ -498,6 +498,11 @@ class OutputManager:
             h for h, r in results['phase1'].items()
             if r.get('status') == 'UNKNOWN'
         ]
+        # UNKNOWN hosts that DID respond (Notify-14) — IKE is running, transform unknown
+        unknown_responsive = [
+            h for h in unknown_hosts
+            if results['phase1'][h].get('got_any_response', False)
+        ]
         fw_filtered_hosts = [
             h for h, r in results['phase1'].items()
             if r.get('status') == 'FIREWALL_FILTERED'

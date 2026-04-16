@@ -473,11 +473,22 @@ async def main() -> int:
     if not proceed:
         output.finalize(interrupted=False, wordlist_path=wordlist_path,
                         target_count=len(valid_ips))
-        tui.console.print('\n[dim]Phase 2 cancelled. Phase 1 results saved.[/]')
+        tui.console.print('\n[dim]Phase 2 cancelled. Phase 1 results saved.[/]', justify='left')
+        tui.console.print(f'\n  Results: [dim]{output.run_dir}[/]', justify='left')
+        tui.console.print('  [dim]Review summary.txt for ike-scan commands and findings.[/]', justify='left')
         return 0
 
     # Apply the user's chosen speed to scanner and TUI
     scanner.delay_ms = chosen_delay
+
+    # Mark AM-confirmed-no-transform hosts as COMPLETE so Phase 2 skips them.
+    # These hosts have AM enabled (Notify-14 confirmed) but no matching transform
+    # was found — there's no point probing the wordlist against them.
+    from ike_cazador.constants import Phase2Status
+    for ts in scanner.target_states.values():
+        if (ts.p1_status.name == 'AGGRESSIVE' and
+                not ts.locked_transform and not ts.locked_dh_group):
+            ts.p2_status = Phase2Status.COMPLETE
 
     # -----------------------------------------------------------------------
     # 10. Phase 2: Wordlist brute-force
@@ -529,6 +540,17 @@ async def main() -> int:
 
     if interrupted:
         tui.console.print('[yellow]Scan interrupted by user. All results saved.[/]')
+
+    # Always show results path — even if no hashes captured, summary.txt has
+    # AM confirmation commands and investigation findings.
+    tui.console.print(
+        f'\n  Results: [dim]{output.run_dir}[/]',
+        justify='left'
+    )
+    tui.console.print(
+        f'  [dim]Review summary.txt for ike-scan commands and findings.[/]',
+        justify='left'
+    )
 
     return 0
 

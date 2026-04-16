@@ -98,6 +98,17 @@ SINGLE_TRANSFORM_PRIORITY: list[Transform] = [
     Transform(EncAlg.AES_CBC,        256, HashAlg.SHA256, AuthMethod.PSK,       DHGroup.GROUP_19),
     Transform(EncAlg.AES_CBC,        128, HashAlg.SHA256, AuthMethod.PSK,       DHGroup.GROUP_19),
     Transform(EncAlg.AES_CBC,        256, HashAlg.SHA384, AuthMethod.PSK,       DHGroup.GROUP_20),
+    # --- Priority 7: G16 (4096-bit MODP) — was completely absent ---
+    Transform(EncAlg.AES_CBC,        256, HashAlg.SHA256, AuthMethod.PSK,       DHGroup.GROUP_16),
+    Transform(EncAlg.AES_CBC,        256, HashAlg.SHA384, AuthMethod.PSK,       DHGroup.GROUP_16),
+    Transform(EncAlg.AES_CBC,        128, HashAlg.SHA256, AuthMethod.PSK,       DHGroup.GROUP_16),
+    # --- Priority 8: SHA512 variants missing from G2/G14 ---
+    Transform(EncAlg.AES_CBC,        256, HashAlg.SHA512, AuthMethod.PSK,       DHGroup.GROUP_2),
+    Transform(EncAlg.AES_CBC,        256, HashAlg.SHA512, AuthMethod.PSK,       DHGroup.GROUP_14),
+    Transform(EncAlg.AES_CBC,        128, HashAlg.SHA512, AuthMethod.PSK,       DHGroup.GROUP_14),
+    # --- Priority 9: XAUTH on G5, G14 (Cisco Easy VPN alternative groups) ---
+    Transform(EncAlg.AES_CBC,        128, HashAlg.SHA1,   AuthMethod.XAUTH_PSK, DHGroup.GROUP_14),
+    Transform(EncAlg.TRIPLE_DES_CBC, 0,   HashAlg.SHA1,   AuthMethod.XAUTH_PSK, DHGroup.GROUP_5),
 ]
 
 
@@ -138,6 +149,9 @@ class TargetState:
     # Tracks response type counts for zero-capture diagnosis in final summary
     # e.g. {'NOTIFY_AUTH_FAILED': 13} → cert/RSA auth detected
     p2_response_counts:     dict = field(default_factory=dict)
+    # True when ANY Phase 1 bundled probe received ANY response (even Notify-14).
+    # Distinguishes UNKNOWN-but-responsive (IKE running) from truly silent hosts.
+    got_any_response:       bool = False
 
     @property
     def is_p2_active(self) -> bool:
@@ -328,11 +342,8 @@ class Scanner:
         try:
             await asyncio.gather(*tasks, return_exceptions=True)
         except (asyncio.CancelledError, KeyboardInterrupt):
-            # Soft stop — tasks check self._stop and return early on next iteration.
-            # We fall through and record whatever was classified before the stop.
             self.output.log_info('Phase 1 stopped early — recording partial results')
         finally:
-            # Stop the Phase 1 recv loop
             self._sync_recv_active = False
             p1_recv_task.cancel()
             try:
@@ -341,13 +352,38 @@ class Scanner:
                 pass
             self._sync_queues.clear()
 
+        # Any host still in PROBING status after gather = task raised an exception
+        # (e.g. unsupported DH group, socket error) or was interrupted mid-probe.
+        # Reclassify based on whether it got any responses at all.
+        for ts in self.target_states.values():
+            if ts.p1_status == HostStatus.PROBING:
+                if ts.got_any_response:
+                    # Got Notify-14 responses — AM is confirmed running
+                    ts.p1_status = HostStatus.AGGRESSIVE
+                    ts.p1_detail = (
+                        'AM confirmed via Notify-14 — device processed AM exchange. '
+                        'Transform not matched: PSK capture not possible without '
+                        'the correct transform configuration.'
+                    )
+                    self.output.log_info(
+                        f'[Phase1] [{ts.ip}] reclassified PROBING → AGGRESSIVE '
+                        f'(Notify-14 responses received — AM is running)'
+                    )
+                else:
+                    ts.p1_status = HostStatus.NO_RESPONSE
+                    ts.p1_detail = 'No response received during Phase 1 probing'
+                    self.output.log_info(
+                        f'[Phase1] [{ts.ip}] reclassified PROBING → NO_RESPONSE'
+                    )
+
         # Record Phase 1 results in output manager (partial or complete)
         for ip, ts in self.target_states.items():
             self.output.record_phase1_result(ip, {
-                'status':    ts.p1_status.name,
-                'transform': str(ts.locked_transform) if ts.locked_transform else 'none',
-                'vendor':    ts.vendor_str,
-                'detail':    ts.p1_detail,
+                'status':           ts.p1_status.name,
+                'transform':        str(ts.locked_transform) if ts.locked_transform else 'none',
+                'vendor':           ts.vendor_str,
+                'detail':           ts.p1_detail,
+                'got_any_response': ts.got_any_response,
             })
 
         self.output.log_info('Phase 1 complete')
@@ -419,6 +455,7 @@ class Scanner:
                     f'[Phase2] [{ts.ip}] no transform confirmed after pre-scan — '
                     f'host will not receive wordlist probes'
                 )
+                ts.p2_status = Phase2Status.COMPLETE  # update status so TUI shows correctly
                 if ts in active:
                     active.remove(ts)
 
@@ -588,9 +625,16 @@ class Scanner:
                 if self.tui_callback:
                     self.tui_callback('p1_update', {'host': ts.ip, 'state': ts})
 
-                result = await self._send_probe_and_receive(
-                    ts, random_group_id, TRANSFORMS_BY_GROUP[dh_group]
-                )
+                try:
+                    result = await self._send_probe_and_receive(
+                        ts, random_group_id, TRANSFORMS_BY_GROUP[dh_group]
+                    )
+                except (ValueError, KeyError) as e:
+                    # Unsupported DH group (e.g. missing from MODP_GROUPS) — skip
+                    self.output.log_debug(
+                        f'[Phase1] [{ts.ip}] G{int(dh_group)} probe skipped: {e}'
+                    )
+                    continue
 
                 # Inter-probe delay — lets rate-limiting devices recover
                 # before we send the next DH group probe
@@ -603,6 +647,7 @@ class Scanner:
 
                 # Got a response — record it
                 got_any_bundled_response = True
+                ts.got_any_response = True   # IKE is definitely running on this host
                 classified = self._classify_phase1_response(
                     result, ts, dh_group, group_id=random_group_id
                 )
@@ -674,6 +719,7 @@ class Scanner:
                     if result is None:
                         continue
                     got_any_bundled_response = True
+                    ts.got_any_response = True
                     classified = self._classify_phase1_response(
                         result, ts, dh_group, group_id=named_group
                     )
@@ -726,16 +772,23 @@ class Scanner:
                         self.tui_callback('p1_update', {'host': ts.ip, 'state': ts})
                     return
 
-            # --- Final classification — host responded (Notify-14s) but no
-            #     matching transform found in bundled or deep scan.
-            # At this point got_any_bundled_response is always True (zero-response
-            # hosts were already classified and returned earlier).
-            ts.p1_status = HostStatus.UNKNOWN
+            # --- Final classification ---
+            # The device responded to every probe with Notify-14 (NO_PROPOSAL_CHOSEN).
+            #
+            # Notify-14 = the device UNDERSTOOD and PROCESSED the AM request.
+            # It evaluated our SA proposal and rejected the transform.
+            # A device with AM DISABLED would return Notify-7/Notify-29 or silence.
+            # Notify-14 from an AM probe is DEFINITIVE PROOF that AM is running.
+            #
+            # Therefore: AGGRESSIVE — AM is confirmed enabled.
+            # The transform was not matched, so no PSK capture is possible,
+            # but the FINDING is valid and must be reported.
+            ts.p1_status = HostStatus.AGGRESSIVE
             ts.p1_detail = (
-                f'All 8 DH groups (bundled) + {len(SINGLE_TRANSFORM_PRIORITY)} '
-                f'single-transform probes exhausted — device responded with '
-                f'NO_PROPOSAL_CHOSEN to every probe. May require a non-standard '
-                f'transform, source-IP whitelisting, or certificate-only auth.'
+                f'AM confirmed via Notify-14 — device processed AM exchange '
+                f'({len(SINGLE_TRANSFORM_PRIORITY)} transforms probed, none matched). '
+                f'PSK capture not possible without the correct transform. '
+                f'Use ike-scan commands in summary.txt to validate the finding.'
             )
 
             ts.p1_deep_scanning      = False
@@ -789,6 +842,8 @@ class Scanner:
                 )
                 continue
 
+            # Any response from deep scan = IKE is running
+            ts.got_any_response = True
             self.output.log_debug(
                 f'[Phase1-Deep] [{ts.ip}] probe {i+1}/{len(SINGLE_TRANSFORM_PRIORITY)} '
                 f'{transform} → {result.response_type.name}'
@@ -1243,60 +1298,67 @@ class Scanner:
         This runs BEFORE the wordlist loop so it doesn't block round-robin probing.
         Uses the FIRST wordlist word as the test group ID.
         """
-        dh_group = ts.locked_dh_group or DHGroup.GROUP_2
         test_word = self.wordlist[0] if self.wordlist else 'vpn'
-        transforms_to_try = TRANSFORMS_BY_GROUP.get(dh_group, [])
 
-        self.output.log_info(
-            f'[Phase2-Discover] [{ts.ip}] probing {len(transforms_to_try)} '
-            f'transforms for G{int(dh_group)} individually'
-        )
+        # When a specific DH group is locked (Notify-24 hosts), probe only that group.
+        # When no group is locked (Notify-14 exhaustion hosts), try ALL groups —
+        # maximises coverage in case Phase 1 missed a transform.
+        if ts.locked_dh_group:
+            groups_to_probe = [ts.locked_dh_group]
+        else:
+            groups_to_probe = list(DH_PROBE_ORDER)
 
-        for transform in transforms_to_try:
-            result = await self._send_probe_and_receive(
-                ts, test_word, [transform]
+        for dh_group in groups_to_probe:
+            transforms_to_try = TRANSFORMS_BY_GROUP.get(dh_group, [])
+
+            self.output.log_info(
+                f'[Phase2-Discover] [{ts.ip}] probing {len(transforms_to_try)} '
+                f'transforms for G{int(dh_group)} individually'
             )
-            if result is None:
-                continue  # timeout — try next
 
-            rtype = result.response_type
-            if rtype == ResponseType.CONFIRMED_AM2:
-                # Found it — and got a hash
-                self._lock_transform_from_response(ts, result, dh_group)
-                probe_entry = self._pending_probes.get(result.cky_i)
-                if probe_entry:
-                    _, probe_meta, _ = probe_entry
-                    self._pending_probes.pop(result.cky_i, None)
-                    await self._handle_capture_with_meta(
-                        ts, test_word, 0, result, probe_meta, active_list
+            for transform in transforms_to_try:
+                result = await self._send_probe_and_receive(
+                    ts, test_word, [transform]
+                )
+                if result is None:
+                    continue  # timeout — try next
+
+                rtype = result.response_type
+                if rtype == ResponseType.CONFIRMED_AM2:
+                    # Found it — and got a hash
+                    self._lock_transform_from_response(ts, result, dh_group)
+                    probe_entry = self._pending_probes.get(result.cky_i)
+                    if probe_entry:
+                        _, probe_meta, _ = probe_entry
+                        self._pending_probes.pop(result.cky_i, None)
+                        await self._handle_capture_with_meta(
+                            ts, test_word, 0, result, probe_meta, active_list
+                        )
+                    self.output.log_info(
+                        f'[Phase2-Discover] [{ts.ip}] transform confirmed via AM2: {transform}'
                     )
-                self.output.log_info(
-                    f'[Phase2-Discover] [{ts.ip}] transform confirmed via AM2: {transform}'
-                )
-                return
+                    return
 
-            elif rtype in (ResponseType.NOTIFY_INVALID_ID,
-                           ResponseType.NOTIFY_AUTH_FAILED):
-                # Transform accepted by device (Notify-18 = group not found,
-                # Notify-24 = group found but auth failed).
-                # Either way: this transform passes the device's SA policy check.
-                ts.locked_transform    = transform
-                ts.locked_dh_group     = dh_group
-                ts.transform_confirmed = True
-                self.output.log_info(
-                    f'[Phase2-Discover] [{ts.ip}] transform confirmed via '
-                    f'{rtype.name}: {transform}'
-                )
-                return
+                elif rtype in (ResponseType.NOTIFY_INVALID_ID,
+                               ResponseType.NOTIFY_AUTH_FAILED):
+                    # Transform accepted — lock it and proceed to wordlist
+                    ts.locked_transform    = transform
+                    ts.locked_dh_group     = dh_group
+                    ts.transform_confirmed = True
+                    self.output.log_info(
+                        f'[Phase2-Discover] [{ts.ip}] transform confirmed via '
+                        f'{rtype.name}: {transform}'
+                    )
+                    return
 
-            elif rtype == ResponseType.NOTIFY_NO_PROPOSAL:
-                # Transform explicitly rejected — try next
-                self.output.log_debug(
-                    f'[Phase2-Discover] [{ts.ip}] {transform} rejected (Notify-14)'
-                )
-                continue
+                elif rtype == ResponseType.NOTIFY_NO_PROPOSAL:
+                    # Transform rejected — try next
+                    self.output.log_debug(
+                        f'[Phase2-Discover] [{ts.ip}] {transform} rejected (Notify-14)'
+                    )
+                    continue
 
-        # All transforms exhausted — leave locked_transform=None
+        # All groups and transforms exhausted — leave locked_transform=None
         # (caller will remove host from active list)
         self.output.log_warning(
             f'[Phase2-Discover] [{ts.ip}] no transform accepted — '

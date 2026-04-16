@@ -32,7 +32,7 @@ ECP_CURVES = {
 
 MODP_GROUPS = {
     DHGroup.GROUP_1, DHGroup.GROUP_2, DHGroup.GROUP_5,
-    DHGroup.GROUP_14, DHGroup.GROUP_15,
+    DHGroup.GROUP_14, DHGroup.GROUP_15, DHGroup.GROUP_16,
 }
 
 
@@ -130,8 +130,11 @@ TRANSFORMS_BY_GROUP: dict[DHGroup, list[Transform]] = {
 
     DHGroup.GROUP_2: [  # 1024-bit MODP — most common legacy
         _t(EncAlg.AES_CBC,        256, HashAlg.SHA256, DHGroup.GROUP_2),
+        _t(EncAlg.AES_CBC,        256, HashAlg.SHA384, DHGroup.GROUP_2),  # gap filled
+        _t(EncAlg.AES_CBC,        256, HashAlg.SHA512, DHGroup.GROUP_2),  # gap filled
         _t(EncAlg.AES_CBC,        192, HashAlg.SHA256, DHGroup.GROUP_2),
         _t(EncAlg.AES_CBC,        192, HashAlg.SHA1,   DHGroup.GROUP_2),
+        _t(EncAlg.AES_CBC,        128, HashAlg.SHA384, DHGroup.GROUP_2),  # gap filled
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA256, DHGroup.GROUP_2),
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA1,   DHGroup.GROUP_2),
         _t(EncAlg.TRIPLE_DES_CBC, 0,   HashAlg.SHA256, DHGroup.GROUP_2),
@@ -142,10 +145,13 @@ TRANSFORMS_BY_GROUP: dict[DHGroup, list[Transform]] = {
     ],
 
     DHGroup.GROUP_14: [  # 2048-bit MODP — modern standard
+        _t(EncAlg.AES_CBC,        256, HashAlg.SHA512, DHGroup.GROUP_14),  # gap filled
         _t(EncAlg.AES_CBC,        256, HashAlg.SHA256, DHGroup.GROUP_14),
         _t(EncAlg.AES_CBC,        256, HashAlg.SHA384, DHGroup.GROUP_14),
+        _t(EncAlg.AES_CBC,        192, HashAlg.SHA512, DHGroup.GROUP_14),  # gap filled
         _t(EncAlg.AES_CBC,        192, HashAlg.SHA256, DHGroup.GROUP_14),
         _t(EncAlg.AES_CBC,        192, HashAlg.SHA1,   DHGroup.GROUP_14),
+        _t(EncAlg.AES_CBC,        128, HashAlg.SHA512, DHGroup.GROUP_14),  # gap filled
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA256, DHGroup.GROUP_14),
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA1,   DHGroup.GROUP_14),
         _t(EncAlg.TRIPLE_DES_CBC, 0,   HashAlg.SHA256, DHGroup.GROUP_14),
@@ -153,7 +159,9 @@ TRANSFORMS_BY_GROUP: dict[DHGroup, list[Transform]] = {
     ],
 
     DHGroup.GROUP_5: [  # 1536-bit MODP — transitional
+        _t(EncAlg.AES_CBC,        256, HashAlg.SHA384, DHGroup.GROUP_5),  # gap filled
         _t(EncAlg.AES_CBC,        256, HashAlg.SHA256, DHGroup.GROUP_5),
+        _t(EncAlg.AES_CBC,        128, HashAlg.SHA384, DHGroup.GROUP_5),  # gap filled
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA256, DHGroup.GROUP_5),
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA1,   DHGroup.GROUP_5),
         _t(EncAlg.TRIPLE_DES_CBC, 0,   HashAlg.SHA1,   DHGroup.GROUP_5),
@@ -182,6 +190,12 @@ TRANSFORMS_BY_GROUP: dict[DHGroup, list[Transform]] = {
         _t(EncAlg.AES_CBC,        256, HashAlg.SHA256, DHGroup.GROUP_15),
         _t(EncAlg.AES_CBC,        256, HashAlg.SHA384, DHGroup.GROUP_15),
         _t(EncAlg.AES_CBC,        128, HashAlg.SHA256, DHGroup.GROUP_15),
+    ],
+
+    DHGroup.GROUP_16: [  # 4096-bit MODP — high-security (was missing entirely)
+        _t(EncAlg.AES_CBC,        256, HashAlg.SHA256, DHGroup.GROUP_16),
+        _t(EncAlg.AES_CBC,        256, HashAlg.SHA384, DHGroup.GROUP_16),
+        _t(EncAlg.AES_CBC,        128, HashAlg.SHA256, DHGroup.GROUP_16),
     ],
 
     DHGroup.GROUP_21: [  # ECP P-521 — rare, requires cryptography EC lib

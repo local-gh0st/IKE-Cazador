@@ -263,6 +263,8 @@ class TUI:
                     t = str(ts.locked_transform)
                 elif ts.locked_dh_group:
                     t = f'G{int(ts.locked_dh_group)} (transform unconfirmed — detected via Notify-24)'
+                elif ts.got_any_response:
+                    t = 'AM confirmed via Notify-14 — transform unknown, no PSK capture'
                 else:
                     t = '— (transform unknown)'
                 vendor = f' | {ts.vendor_str}' if ts.vendor_str != 'Unknown' else ''
@@ -553,18 +555,40 @@ class TUI:
         )
         self.console.print()
 
+        # Split aggressive hosts:
+        #   psk_capturable  = have a confirmed/discoverable transform → can probe wordlist
+        #   am_no_transform = AM confirmed via Notify-14 but no transform found → skip wordlist
+        psk_capturable  = [(ip, ts) for ip, ts in aggressive
+                           if ts.locked_transform or ts.locked_dh_group]
+        am_no_transform = [(ip, ts) for ip, ts in aggressive
+                           if not ts.locked_transform and not ts.locked_dh_group]
+
         if aggressive:
-            self.console.print('  [bold green]Hosts queued for Phase 2:[/]', justify='left')
-            for ip, ts in aggressive:
-                if ts.locked_transform:
-                    t = str(ts.locked_transform)
-                elif ts.locked_dh_group:
-                    t = f'G{int(ts.locked_dh_group)} (unconfirmed — Notify-24)'
-                else:
-                    t = '—'
-                wc  = '  [WILDCARD LIKELY]' if ts.wildcard_confirmed else ''
-                self.console.print(f'    {ip:<22}  {t}{wc}', justify='left')
-            self.console.print()
+            if psk_capturable:
+                self.console.print('  [bold green]Hosts queued for Phase 2:[/]', justify='left')
+                for ip, ts in psk_capturable:
+                    if ts.locked_transform:
+                        t = str(ts.locked_transform)
+                    elif ts.locked_dh_group:
+                        t = f'G{int(ts.locked_dh_group)} (unconfirmed — Notify-24)'
+                    else:
+                        t = '—'
+                    wc  = '  [WILDCARD LIKELY]' if ts.wildcard_confirmed else ''
+                    self.console.print(f'    {ip:<22}  {t}{wc}', justify='left')
+                self.console.print()
+
+            if am_no_transform:
+                self.console.print(
+                    '  [yellow]AM confirmed — transform not found (PSK capture not possible):[/]',
+                    justify='left'
+                )
+                for ip, _ in am_no_transform:
+                    self.console.print(
+                        f'    {ip:<22}  AM confirmed via Notify-14 — transform not found. '
+                        f'Manual investigation recommended.',
+                        style='dim', justify='left'
+                    )
+                self.console.print()
 
         if rsa_auth:
             self.console.print('  [yellow]RSA/cert auth (skipped — no PSK):[/]', justify='left')
@@ -607,12 +631,29 @@ class TUI:
             self.console.print()
             return False, delay_ms
 
+        if not psk_capturable:
+            # All aggressive hosts have AM confirmed but no matched transform
+            self.console.print(
+                '  [yellow]AM confirmed on all aggressive hosts but no transform matched.[/]',
+                justify='left'
+            )
+            self.console.print(
+                '  [dim]PSK capture is not possible — Phase 2 skipped.[/]',
+                justify='left'
+            )
+            self.console.print(
+                '  [dim]Review summary.txt for ike-scan validation commands.[/]',
+                justify='left'
+            )
+            self.console.print()
+            return False, delay_ms
+
         self.console.print(sep)
         self.console.print(f'  Wordlist:          {wordlist_path}  ({total_words} words)', justify='left')
-        total_probes = len(aggressive) * total_words
+        total_probes = len(psk_capturable) * total_words
         self.console.print(
             f'  Estimated probes:  ~{total_probes:,}  '
-            f'({len(aggressive)} host(s) × {total_words} words)',
+            f'({len(psk_capturable)} host(s) × {total_words} words)',
             justify='left',
         )
         self.console.print()
@@ -733,6 +774,7 @@ class TUI:
                 f'  Wildcard-flagged:       [cyan]{wildcard}[/]',
                 justify='left'
             )
+
         if captures > 0:
             gf = generated_files or {}
             self.console.print()
