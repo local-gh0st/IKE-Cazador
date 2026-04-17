@@ -164,9 +164,11 @@ def validate_capture(capture: 'CapturedHash') -> tuple:
         except ValueError:
             return False, [f'Field {name} contains non-hex characters']
 
-    # hash_r must be a known HMAC output size
-    if hash_r_bytes not in (16, 20, 32, 48, 64):
-        return False, [f'hash_r size {hash_r_bytes}B is not 16 (MD5) / 20 (SHA1) / 32 (SHA256) / 48 (SHA384) / 64 (SHA512)']
+    # hash_r must be a known HMAC output size.
+    # 28 bytes (SHA-224) included for consistency with packet_parser.py valid_hash_sizes,
+    # though SHA-224 is never negotiated in IKEv1 in practice.
+    if hash_r_bytes not in (16, 20, 28, 32, 48, 64):
+        return False, [f'hash_r size {hash_r_bytes}B is not a known HMAC size (16/20/28/32/48/64)']
 
     # hash_r must not be all zeros
     if bytes.fromhex(parts[8]) == b'\x00' * hash_r_bytes:
@@ -176,7 +178,9 @@ def validate_capture(capture: 'CapturedHash') -> tuple:
     if cky_r_bytes != 8 or cky_i_bytes != 8:
         return False, [f'Cookie size wrong: cky_r={cky_r_bytes}B cky_i={cky_i_bytes}B (expect 8B each)']
 
-    # idir_b minimum: 4-byte header + at least 1 byte of identity data = 5 bytes
+    # idir_b minimum: the ID body has already had its 4-byte generic header
+    # stripped at parse time (bytes[4:declared_len]). What remains is:
+    # IDtype(1) + proto(1) + port(2) + id_data — minimum 5 bytes total.
     # For IPv4: exactly 8 bytes (4 header + 4 IP)
     # For FQDN: 4 header + N chars
     if idir_b_bytes < 5:

@@ -493,25 +493,41 @@ def _classify_notify(ntype: int) -> tuple[ResponseType, str]:
 
 
 def _extract_vendor_ids(p: ISAKMP) -> list[bytes]:
-    """Extract all Vendor ID payload bytes from a parsed ISAKMP packet."""
+    """Extract all Vendor ID payload bytes from a parsed ISAKMP packet.
+
+    Uses a bounded iteration approach with haslayer/getlayer — the module's
+    `while layer: layer = layer.payload` pattern is explicitly banned because
+    it can loop infinitely on malformed packets and bleeds bytes from subsequent
+    payloads into the VID body.
+    """
     vids = []
-    # Walk payload chain safely using haslayer check approach
-    # Collect all VID layers
-    layer = p
-    while layer:
-        if layer.haslayer(ISAKMP_payload_VendorID):
-            vid_layer = layer.getlayer(ISAKMP_payload_VendorID)
-            if vid_layer:
-                vid_bytes = bytes(vid_layer)
-                # VID payload body = bytes after 4-byte generic header
-                if len(vid_bytes) > 4:
-                    vids.append(vid_bytes[4:])
-                # Move past this layer to find more VIDs
-                layer = vid_layer.payload
-            else:
-                break
-        else:
+    MAX_VIDS = 20  # reasonable upper bound for any real IKE packet
+
+    # Walk Scapy payload chain safely: get the first VID, then walk .payload
+    # manually with a counter bound to prevent infinite loops.
+    current = p
+    for _ in range(MAX_VIDS):
+        if not current.haslayer(ISAKMP_payload_VendorID):
             break
+        vid_layer = current.getlayer(ISAKMP_payload_VendorID)
+        if vid_layer is None:
+            break
+
+        vid_raw = bytes(vid_layer)
+        # VID body = bytes after the 4-byte generic payload header,
+        # bounded by the declared length field to prevent payload bleeding.
+        if len(vid_raw) >= 4:
+            import struct as _s
+            declared = _s.unpack('!H', vid_raw[2:4])[0]
+            body = vid_raw[4:declared] if declared <= len(vid_raw) else vid_raw[4:]
+            if body:
+                vids.append(body)
+
+        # Advance past this VID to look for the next one
+        if vid_layer.payload is None:
+            break
+        current = vid_layer.payload
+
     return vids
 
 
@@ -519,29 +535,41 @@ def _has_payload_type(raw: bytes, payload_type: int) -> bool:
     """
     Walk the raw ISAKMP payload chain looking for a specific payload type.
     Avoids infinite loops by tracking position and bounding iterations.
+
+    L-1 fix: each iteration checks the CURRENT payload type (read from the
+    generic header's first byte at `pos`), not the next_payload pointer.
+    The original code checked `next_payload` which is the type of the FOLLOWING
+    payload — this caused the last payload in the chain (e.g. SIG type 9) to
+    never be found since its `next=0` was checked instead.
     """
     if len(raw) < ISAKMP_HEADER_LEN:
         return False
 
     pos = ISAKMP_HEADER_LEN
-    next_payload = raw[16]  # first payload type from ISAKMP header
-    max_iterations = 20     # safety bound
+    # The ISAKMP header's next_payload field (byte 16) points to the first payload
+    current_type = raw[16]
+    max_iterations = 20
 
     for _ in range(max_iterations):
-        if next_payload == 0:
+        if current_type == 0:
             break
-        if next_payload == payload_type:
-            return True
         if pos + 4 > len(raw):
             break
-        # Read payload length from generic header
+        # Check the CURRENT payload type
+        if current_type == payload_type:
+            return True
+        # Read this payload's length and advance to the next one
         payload_len = struct.unpack('!H', raw[pos+2:pos+4])[0]
         if payload_len < 4:
             break
-        next_payload = raw[pos]  # next_payload is first byte of generic header
+        # The next payload type is in byte 0 of THIS payload's generic header
+        next_type = raw[pos]
         pos += payload_len
         if pos >= len(raw):
+            # We've advanced past the last payload — check if it was our target
+            # (it was already checked above, so just break)
             break
+        current_type = next_type
 
     return False
 

@@ -643,7 +643,7 @@ class Scanner:
                     self.tui_callback('p1_update', {'host': ts.ip, 'state': ts})
 
                 try:
-                    result = await self._send_probe_and_receive(
+                    result, _ = await self._send_probe_and_receive(
                         ts, random_group_id, TRANSFORMS_BY_GROUP[dh_group]
                     )
                 except (ValueError, KeyError) as e:
@@ -728,7 +728,7 @@ class Scanner:
                 for dh_group in [DHGroup.GROUP_2, DHGroup.GROUP_14]:
                     if self._stop:
                         return
-                    result = await self._send_probe_and_receive(
+                    result, _ = await self._send_probe_and_receive(
                         ts, named_group, TRANSFORMS_BY_GROUP[dh_group]
                     )
                     if self.p1_probe_delay_ms > 0:
@@ -843,7 +843,7 @@ class Scanner:
             if self.tui_callback:
                 self.tui_callback('p1_update', {'host': ts.ip, 'state': ts})
 
-            result = await self._send_probe_and_receive(
+            result, _ = await self._send_probe_and_receive(
                 ts, group_id, [transform]
             )
 
@@ -1233,14 +1233,26 @@ class Scanner:
                 break
 
             now = time.time()
+            # Use entry[2] for sent_at — handles both 3-tuple (normal probes)
+            # and 4-tuple (wildcard validation probes) without crashing.
             stale_keys = [
-                k for k, (_, _, sent_at) in self._pending_probes.items()
-                if now - sent_at > self._retention_window
+                k for k, entry in self._pending_probes.items()
+                if len(entry) >= 3 and now - entry[2] > self._retention_window
             ]
             for k in stale_keys:
                 entry = self._pending_probes.pop(k, None)
                 if entry:
-                    ts, probe_meta, sent_at = entry
+                    ts       = entry[0]
+                    sent_at  = entry[2]
+                    # 4-tuple = wildcard validation probe — has its own timeout/queue,
+                    # skip dead-host logic (the wc_q.get() handles the timeout itself)
+                    if len(entry) == 4:
+                        self.output.log_debug(
+                            f'[Phase2] [{ts.ip}] wildcard probe stale after '
+                            f'{now - sent_at:.1f}s — cleaned up'
+                        )
+                        continue
+                    probe_meta = entry[1]
                     # Increment timeout counter for this host
                     ts.consecutive_timeouts += 1
                     self.output.log_debug(
@@ -1323,7 +1335,7 @@ class Scanner:
             )
 
             for transform in transforms_to_try:
-                result = await self._send_probe_and_receive(
+                result, probe_meta = await self._send_probe_and_receive(
                     ts, test_word, [transform]
                 )
                 if result is None:
@@ -1331,12 +1343,11 @@ class Scanner:
 
                 rtype = result.response_type
                 if rtype == ResponseType.CONFIRMED_AM2:
-                    # Found it — and got a hash
+                    # Found it — and got a hash.
+                    # Use probe_meta returned directly from _send_probe_and_receive
+                    # (it was already popped from _pending_probes, so get() would return None).
                     self._lock_transform_from_response(ts, result, dh_group)
-                    probe_entry = self._pending_probes.get(result.cky_i)
-                    if probe_entry:
-                        _, probe_meta, _ = probe_entry
-                        self._pending_probes.pop(result.cky_i, None)
+                    if probe_meta:
                         await self._handle_capture_with_meta(
                             ts, test_word, 0, result, probe_meta, active_list
                         )
@@ -1385,7 +1396,7 @@ class Scanner:
         transforms = TRANSFORMS_BY_GROUP.get(dh_group, [])
 
         for transform in transforms:
-            result = await self._send_probe_and_receive(
+            result, probe_meta = await self._send_probe_and_receive(
                 ts, word, [transform]
             )
             if result is None:
@@ -1394,10 +1405,7 @@ class Scanner:
             rtype = result.response_type
             if rtype == ResponseType.CONFIRMED_AM2:
                 self._lock_transform_from_response(ts, result, dh_group)
-                probe_entry = self._pending_probes.get(result.cky_i)
-                if probe_entry:
-                    _, probe_meta, _ = probe_entry
-                    self._pending_probes.pop(result.cky_i, None)
+                if probe_meta:
                     await self._handle_capture_with_meta(
                         ts, word, word_idx, result, probe_meta, active_list
                     )
@@ -1758,10 +1766,13 @@ class Scanner:
         ts:         TargetState,
         group_id:   str,
         transforms: list[Transform],
-    ) -> Optional[ParsedResponse]:
+    ) -> tuple:
         """
         Build and send one AM1 probe, wait for response with retries.
-        Returns ParsedResponse or None on timeout.
+        Returns (ParsedResponse, ProbeMetadata) on success, (None, None) on timeout.
+
+        Both values are returned so callers can use the ProbeMetadata for hash
+        extraction without relying on _pending_probes (which is popped on success).
         """
         loop = asyncio.get_running_loop()
 
@@ -1819,14 +1830,14 @@ class Scanner:
                     self.output.add_pcap_packet(raw, direction='in')
                     self._sync_queues.pop(cky_i, None)
                     self._pending_probes.pop(cky_i, None)
-                    return parsed
+                    return parsed, probe
                 except asyncio.TimeoutError:
                     pass  # retry
 
             # All retries exhausted
             self._sync_queues.pop(cky_i, None)
             self._pending_probes.pop(cky_i, None)
-            return None
+            return None, None
 
         # Legacy polling path (Phase 2 inline discovery, wildcard validation, etc.)
         # Send with retries
@@ -1845,7 +1856,7 @@ class Scanner:
                 self.output.add_pcap_packet(result.raw, direction='in')
                 # Clean up probe tracking (synchronous path — Phase 1 or inline discovery)
                 self._pending_probes.pop(cky_i, None)
-                return result
+                return result, probe
 
             last_result = None  # timeout on this attempt
 
@@ -1856,7 +1867,7 @@ class Scanner:
             # Only remove if it was just added (no word_idx set) — i.e. Phase 1 caller
             if entry and entry[1].word_idx == -1:
                 self._pending_probes.pop(cky_i, None)
-        return None  # timeout
+        return None, None  # timeout
 
     async def _send_probe_only(
         self,
