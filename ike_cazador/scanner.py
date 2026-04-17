@@ -1,8 +1,8 @@
 """
 Scanner — Phase 1 discovery and Phase 2 wordlist enumeration.
 
-Phase 1: Probe each target with 8 DH group probes (random string group ID).
-         Bundled-transform probes first (8 DH groups, all enc/hash combos bundled).
+Phase 1: Probe each target with 9 DH group probes (random string group ID).
+         Bundled-transform probes first (9 DH groups, all enc/hash combos bundled).
          If all 8 bundled probes exhaust without a hit, falls through to a
          single-transform sequential deep scan (24 probes, priority-ordered).
          This catches rate-limiting devices (e.g. Cisco VPN Concentrator 3000)
@@ -273,7 +273,6 @@ class Scanner:
         self.p1_probe_delay_ms   = p1_probe_delay_ms
         self.p1_deep_cooldown_ms = p1_deep_cooldown_ms
         self.concurrency         = concurrency
-        self.concurrency         = concurrency
         self.cleanup_sas         = cleanup_sas
         self.interface           = interface
         self.tui_callback        = tui_callback
@@ -351,6 +350,13 @@ class Scanner:
             except asyncio.CancelledError:
                 pass
             self._sync_queues.clear()
+            # Close socket after Phase 1 — prevents "Address already in use" on re-run
+            if self._sock:
+                try:
+                    self._sock.close()
+                except Exception:
+                    pass
+                self._sock = None
 
         # Any host still in PROBING status after gather = task raised an exception
         # (e.g. unsupported DH group, socket error) or was interrupted mid-probe.
@@ -411,6 +417,10 @@ class Scanner:
             f'Phase 2 starting — {len(phase2_targets)} host(s), '
             f'{len(self.wordlist)} word(s)'
         )
+
+        # Re-open socket if Phase 1 closed it
+        if not self._sock:
+            self._setup_socket()
 
         active = list(phase2_targets)
         self._p2_active_list = active
@@ -520,6 +530,13 @@ class Scanner:
             except asyncio.CancelledError:
                 pass
             self._p2_active_list = None
+            # Close socket after Phase 2
+            if self._sock:
+                try:
+                    self._sock.close()
+                except Exception:
+                    pass
+                self._sock = None
 
         self.output.log_info(
             f'Phase 2 complete — {self.output.capture_count} hash(es) captured'
@@ -558,7 +575,7 @@ class Scanner:
         Activated by setting _sync_recv_active = True and starting this task.
         Deactivated by cancelling the task and clearing _sync_queues.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             try:
                 data = await asyncio.wait_for(
@@ -592,7 +609,7 @@ class Scanner:
         self, ts: TargetState, semaphore: asyncio.Semaphore
     ) -> None:
         """
-        Probe one target across all 8 DH groups until a definitive result.
+        Probe one target across all 9 DH groups until a definitive result.
         Uses random string group ID for all Phase 1 probes.
 
         After all 8 bundled DH-group probes exhaust, falls through to:
@@ -608,7 +625,7 @@ class Scanner:
             if self.tui_callback:
                 self.tui_callback('p1_update', {'host': ts.ip, 'state': ts})
 
-            # --- Bundled-transform probes across all 8 DH groups ---
+            # --- Bundled-transform probes across all 9 DH groups ---
             # All 8 groups are always tried — no early exit based on silence.
             # A device that responds to G2 but rate-limits G1/G14/etc. must
             # still reach the deep scan where G1 is found.  Missing a live host
@@ -668,7 +685,7 @@ class Scanner:
                 )
 
             # --- After all 8 bundled probes: if zero responses, classify immediately ---
-            # If the host sent NO response to any of our 8 DH group probes, skip
+            # If the host sent NO response to any of our 9 DH group probes, skip
             # the named-group probes and deep scan — they will not help either.
             # A host that is truly alive will have sent at least one Notify-14.
             # Note: this does NOT apply to rate-limited hosts that responded to
@@ -691,12 +708,12 @@ class Scanner:
                 else:
                     ts.p1_status = HostStatus.NO_RESPONSE
                     ts.p1_detail = (
-                        f'No response to any of 8 DH group probes on port {self.port}. '
+                        f'No response to any of 9 DH group probes on port {self.port}. '
                         f'Host may be offline, port may be filtered, or source IP '
                         f'is not whitelisted. Ensure targets list contains known IKE hosts.'
                     )
                 self.output.log_info(
-                    f'[Phase1] [{ts.ip}] zero responses across all 8 DH groups — '
+                    f'[Phase1] [{ts.ip}] zero responses across all 9 DH groups — '
                     f'classified as {ts.p1_status.name}, skipping named/deep scan'
                 )
                 ts.p1_deep_scanning      = False
@@ -886,35 +903,40 @@ class Scanner:
         import struct as _struct
 
         cky_i = os.urandom(8)
-        # IKEv2 IKE_SA_INIT header:
-        # CKY-I(8) + CKY-R(8,zeros) + next_payload(1,0) + version(1,0x20) +
-        # exchange_type(1,34=IKE_SA_INIT) + flags(1,0x08=Initiator) +
-        # msg_id(4,0) + length(4,28)
         header = (
             cky_i +
-            b'\x00' * 8 +   # CKY-R = zeros (initiator sends zeros)
+            b'\x00' * 8 +
             _struct.pack('!BBBBI', 0, 0x20, 34, 0x08, 0) +
             _struct.pack('!I', 28)
         )
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self.output.log_debug(f'[Phase1-IKEv2] [{ts.ip}] sending IKEv2 probe')
+
+        # M-8 fix: during Phase 1, _sync_recv_loop is active and consumes ALL
+        # packets by CKY-I lookup in _sync_queues.  Register a queue for this
+        # probe's CKY-I so the loop routes the IKEv2 response here instead of
+        # dropping it (IKEv2 responses were silently lost under concurrent scan).
+        ikev2_q: asyncio.Queue = asyncio.Queue(maxsize=4)
+        self._sync_queues[cky_i] = ikev2_q
 
         try:
             await loop.sock_sendto(self._sock, header, (ts.ip, ts.port))
         except Exception as e:
             self.output.log_debug(f'[Phase1-IKEv2] [{ts.ip}] send error: {e}')
+            self._sync_queues.pop(cky_i, None)
             return False
 
-        # Wait for response — reuse existing timeout
         try:
-            result = await asyncio.wait_for(
-                self._recv_any(expected_ip=ts.ip),
-                timeout=self.timeout,
+            raw_bytes, src_ip = await asyncio.wait_for(
+                ikev2_q.get(), timeout=self.timeout
             )
+            result = raw_bytes if src_ip == ts.ip else None
         except asyncio.TimeoutError:
             self.output.log_debug(f'[Phase1-IKEv2] [{ts.ip}] no response to IKEv2 probe')
-            return False
+            result = None
+        finally:
+            self._sync_queues.pop(cky_i, None)
 
         if result is None:
             return False
@@ -931,34 +953,6 @@ class Scanner:
             f'version=0x{version_byte:02x} → {"IKEv2" if is_v2 else "IKEv1"}'
         )
         return is_v2
-
-    async def _recv_any(self, expected_ip: str) -> Optional[bytes]:
-        """
-        Receive any UDP packet from expected_ip. Non-blocking poll only.
-        Used by _probe_ikev2 to receive the response without cookie matching.
-        """
-        loop     = asyncio.get_event_loop()
-        deadline = loop.time() + self.timeout
-        while loop.time() < deadline:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
-            try:
-                data = await asyncio.wait_for(
-                    loop.run_in_executor(None, self._try_recv),
-                    timeout=min(remaining, 0.1)
-                )
-            except asyncio.TimeoutError:
-                continue
-            except Exception:
-                continue
-            if data is None:
-                await asyncio.sleep(0.01)
-                continue
-            raw, (src_ip, _) = data
-            if src_ip == expected_ip:
-                return raw
-        return None
 
     def _classify_phase1_response(
         self, result: ParsedResponse, ts: TargetState,
@@ -1116,7 +1110,7 @@ class Scanner:
         so late-arriving AM2 responses (after the per-probe timeout) are still
         captured and processed correctly.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self.output.log_debug('[Phase2] Continuous recv loop started')
 
         while not self._stop:
@@ -1146,6 +1140,18 @@ class Scanner:
             entry = self._pending_probes.get(cky_i)
             if entry is None:
                 continue   # not our probe, ignore
+
+            # Entry is either (ts, probe_meta, sent_at) for normal Phase 2 probes
+            # or (ts, probe, sent_at, wc_q) for wildcard validation probes.
+            # Wildcard probes use a dedicated queue — deliver there instead of capture.
+            if len(entry) == 4:
+                ts, probe_meta, sent_at, wc_q = entry
+                if src_ip == ts.ip:
+                    try:
+                        wc_q.put_nowait((raw, src_ip))
+                    except asyncio.QueueFull:
+                        pass
+                continue
 
             ts, probe_meta, sent_at = entry
 
@@ -1415,12 +1421,6 @@ class Scanner:
             active_list.remove(ts)
         return False
 
-    async def _phase2_probe_word(
-        self, ts: TargetState, word: str, word_idx: int, active_list: list
-    ) -> None:
-        """Legacy method — now delegates to _phase2_send_probe."""
-        await self._phase2_send_probe(ts, word, word_idx, active_list)
-
     async def _handle_capture_with_meta(
         self, ts: TargetState, word: str, word_idx: int,
         result: ParsedResponse, probe_meta: 'ProbeMetadata', active_list: list
@@ -1522,24 +1522,6 @@ class Scanner:
                 'mode':     capture.hashcat_mode,
             })
 
-    async def _handle_capture(
-        self, ts: TargetState, word: str, word_idx: int,
-        result: ParsedResponse, active_list: list
-    ) -> None:
-        """Legacy wrapper — looks up probe metadata from _pending_probes."""
-        entry = self._pending_probes.get(result.cky_i)
-        if not entry:
-            self.output.log_warning(
-                f'[Phase2] [{ts.ip}] AM2 received but no matching probe metadata '
-                f'for cky_i={result.cky_i.hex()}'
-            )
-            return
-        _, probe_meta, _ = entry
-        self._pending_probes.pop(result.cky_i, None)
-        await self._handle_capture_with_meta(
-            ts, word, word_idx, result, probe_meta, active_list
-        )
-
     async def _wildcard_validation_probe(
         self, ts: TargetState, original_response: ParsedResponse,
         original_capture: CapturedHash, active_list: list
@@ -1548,12 +1530,62 @@ class Scanner:
         Send a random-string probe to validate whether the host is a wildcard.
         If AM2 returned → wildcard confirmed → move hash to wildcard-flagged/.
         If Notify returned → legitimate named group → hash stays in valid/.
+
+        CRITICAL-2 fix: routes through _pending_probes + a per-task asyncio.Queue
+        that _continuous_recv_loop delivers to.  Does NOT touch _sync_queues or
+        _sync_recv_active — mutating those from a fire-and-forget task would
+        clobber all concurrent Phase 2 probe state.
         """
         random_id = generate_random_group_id()
         transforms = [ts.locked_transform] if ts.locked_transform else \
                      TRANSFORMS_BY_GROUP.get(DHGroup.GROUP_2, [])
 
-        result = await self._send_probe_and_receive(ts, random_id, transforms)
+        # Build probe manually so we control the CKY-I and can register the queue
+        dh_group  = transforms[0].dh_group
+        keypair   = generate_dh_keypair(dh_group)
+        nonce_i   = generate_nonce(20)
+        cky_i     = generate_cookie()
+
+        probe = build_am1(
+            target_ip=ts.ip,
+            target_port=ts.port,
+            group_id=random_id,
+            transforms=transforms,
+            keypair=keypair,
+            nonce_i=nonce_i,
+            cky_i=cky_i,
+        )
+
+        # Register a per-task queue in _pending_probes so _continuous_recv_loop
+        # delivers the response here when CKY-I matches, without touching any
+        # shared sync-recv state.
+        wc_q: asyncio.Queue = asyncio.Queue(maxsize=4)
+        # Store sentinel tuple: (ts, probe, sent_at, wc_q) — recv loop checks for queue
+        self._pending_probes[cky_i] = (ts, probe, time.time(), wc_q)
+        self.output.add_pcap_packet(probe.raw_am1, direction='out')
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.sock_sendto(self._sock, probe.raw_am1, (ts.ip, ts.port))
+        except Exception as e:
+            self.output.log_debug(f'[Wildcard] [{ts.ip}] send error: {e}')
+            self._pending_probes.pop(cky_i, None)
+            return
+
+        # Wait for _continuous_recv_loop to deliver the response
+        result = None
+        try:
+            raw_bytes, src_ip = await asyncio.wait_for(
+                wc_q.get(), timeout=self.timeout
+            )
+            if src_ip == ts.ip:
+                from .packet_parser import parse_response
+                result = parse_response(raw_bytes, cky_i, src_ip)
+                self.output.add_pcap_packet(raw_bytes, direction='in')
+        except asyncio.TimeoutError:
+            self.output.log_debug(f'[Wildcard] [{ts.ip}] validation probe timeout')
+        finally:
+            self._pending_probes.pop(cky_i, None)
 
         wc_state = self.wildcard_tracker.get_or_create(ts.ip)
 
@@ -1587,27 +1619,6 @@ class Scanner:
                 f'[Wildcard] [{ts.ip}] validation "{random_id}" → NOT wildcard — '
                 f'"{original_capture.group_id}" is a legitimate named group'
             )
-
-    async def _reprobe_all_transforms(
-        self, ts: TargetState, word: str, word_idx: int, active_list: list
-    ) -> None:
-        """
-        For FortiGate/Juniper: re-probe a word with all transforms when
-        the locked transform returns NO_PROPOSAL_CHOSEN.
-        """
-        if not ts.locked_dh_group:
-            return
-
-        for dh_group in DH_PROBE_ORDER:
-            if dh_group == ts.locked_dh_group:
-                continue  # already tried
-            transforms = TRANSFORMS_BY_GROUP.get(dh_group, [])
-            result = await self._send_probe_and_receive(ts, word, transforms)
-            if result and result.response_type == ResponseType.CONFIRMED_AM2:
-                # Found the right transform for this specific group
-                self._lock_transform_from_response(ts, result, dh_group)
-                await self._handle_capture(ts, word, word_idx, result, active_list)
-                return
 
     def _mark_host_inactive(
         self, ts: TargetState, word: str, word_idx: int,
@@ -1724,7 +1735,7 @@ class Scanner:
                 # SOL_IP=0, IP_RECVERR=11
                 if cmsg_level == 0 and cmsg_type == 11 and len(cmsg_data) >= 8:
                     ee_errno, ee_origin, ee_type, ee_code = struct.unpack_from(
-                        '!IBBB', cmsg_data, 0
+                        '=IBBB', cmsg_data, 0
                     )
                     # ee_origin=2 means ICMP
                     if ee_origin == 2 and ee_type == 3:
@@ -1752,7 +1763,7 @@ class Scanner:
         Build and send one AM1 probe, wait for response with retries.
         Returns ParsedResponse or None on timeout.
         """
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Generate fresh keypair, nonce, cookie for this probe
         dh_group = transforms[0].dh_group
@@ -1863,7 +1874,7 @@ class Scanner:
         if not ts.locked_transform:
             return
 
-        loop     = asyncio.get_event_loop()
+        loop     = asyncio.get_running_loop()
         dh_group = ts.locked_transform.dh_group
         keypair  = generate_dh_keypair(dh_group)
         nonce_i  = generate_nonce(20)
@@ -1899,7 +1910,7 @@ class Scanner:
         Wait up to self.timeout seconds for a UDP response from expected_ip
         matching the expected initiator cookie.
         """
-        loop     = asyncio.get_event_loop()
+        loop     = asyncio.get_running_loop()
         deadline = loop.time() + self.timeout
 
         while loop.time() < deadline:
@@ -1951,7 +1962,7 @@ class Scanner:
     ) -> None:
         """Send an ISAKMP Informational DELETE to clean up a half-open SA."""
         try:
-            loop        = asyncio.get_event_loop()
+            loop        = asyncio.get_running_loop()
             delete_pkt  = build_delete_packet(cky_i, cky_r, target_port=port)
             await loop.sock_sendto(self._sock, delete_pkt, (ip, port))
             self.output.log_debug(

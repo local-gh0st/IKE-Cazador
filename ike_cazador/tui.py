@@ -234,7 +234,7 @@ class TUI:
         progress_line = f'[{bar}] {resolved} / {total} hosts resolved'
 
         # Probe order hint
-        probe_order = 'G2 > G14 > G5 > G19 > G20 > G1 > G15 > G21'
+        probe_order = 'G2 > G14 > G1 > G5 > G19 > G20 > G15 > G16 > G21'
 
         # Build table
         tbl = Table(
@@ -278,7 +278,7 @@ class TUI:
             elif ts.p1_status == HostStatus.IKEV2_ONLY:
                 detail = 'IKEv2 — AM PSK attack does not apply'
             elif ts.p1_status == HostStatus.UNKNOWN:
-                detail = 'All 8 DH groups exhausted — transform unknown'
+                detail = 'All 9 DH groups exhausted — transform unknown'
             elif ts.p1_status == HostStatus.NO_RESPONSE:
                 # Use ts.p1_detail which contains the correct port number from scanner
                 detail = ts.p1_detail or 'No IKE response'
@@ -290,7 +290,7 @@ class TUI:
             tbl.add_row(ip, status_text, detail)
 
         content = Text()
-        content.append(f'  Probing {total} host(s) across 8 DH groups\n', style='dim')
+        content.append(f'  Probing {total} host(s) across 9 DH groups\n', style='dim')
         content.append(f'  Probe order: {probe_order}\n', style='dim')
         content.append(f'  {progress_line}\n\n')
 
@@ -603,7 +603,7 @@ class TUI:
             self.console.print()
 
         if unknown:
-            self.console.print('  [yellow]Unknown (all 8 DH groups exhausted, skipped):[/]', justify='left')
+            self.console.print('  [yellow]Unknown (all 9 DH groups exhausted, skipped):[/]', justify='left')
             for ip, _ in unknown:
                 self.console.print(f'    {ip}', style='dim', justify='left')
             self.console.print()

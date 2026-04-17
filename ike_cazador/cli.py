@@ -74,8 +74,9 @@ Examples:
     net = parser.add_argument_group('Network')
     net.add_argument(
         '-p', '--port',
-        type=int, default=500, metavar='PORT',
-        help='Destination port (default: 500, use 4500 for NAT-T)',
+        type=int, default=500,
+        choices=range(1, 65536), metavar='PORT',
+        help='Destination port 1-65535 (default: 500, use 4500 for NAT-T)',
     )
     net.add_argument(
         '--interface',

@@ -660,8 +660,7 @@ def _handle_cisco_fragment(raw: bytes, cky_i: bytes, cky_r: bytes,
         # Reassemble: sort by sequence number, concatenate data
         fragments = sorted(_fragment_buffer.pop(buf_key), key=lambda x: x[0])
         reassembled = b''.join(f[1] for f in fragments)
-        # Clean up and re-parse as a complete packet
-        _fragment_buffer.pop(buf_key, None)
+        # buf_key already removed by pop() above — no second pop needed
         # Rebuild a complete ISAKMP packet: original header + reassembled payload
         # Replace the next_payload byte with the actual first payload type
         # The reassembled data starts with the first payload

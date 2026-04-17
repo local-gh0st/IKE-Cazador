@@ -276,28 +276,27 @@ class OutputManager:
             import warnings
             from scapy.utils import wrpcap
             from scapy.packet import Raw
+            import contextlib
 
             packets = []
             for ts, raw_data, direction in self._pcap_packets:
                 pkt = Raw(load=raw_data)
                 packets.append(pkt)
 
-            # Double-suppress Scapy output:
-            # 1. warnings.catch_warnings — catches any warnings.warn() calls
-            # 2. stderr redirect — catches Scapy logging that goes to stderr
-            #    (e.g. "unknown LL type", "inconsistent linktypes")
-            old_stderr = sys.stderr
-            sys.stderr  = io.StringIO()
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter('ignore')
-                    wrpcap(str(self.pcap_path), packets)
-            finally:
-                sys.stderr = old_stderr
+            # Suppress Scapy output using contextlib.redirect_stderr (exception-safe)
+            # and warnings.catch_warnings for any warnings.warn() calls.
+            with warnings.catch_warnings(), contextlib.redirect_stderr(io.StringIO()):
+                warnings.simplefilter('ignore')
+                wrpcap(str(self.pcap_path), packets)
 
             self.log_info(f'PCAP written: {self.pcap_path} ({len(packets)} packets)')
         except Exception as e:
             self.log_error(f'Failed to write PCAP: {e}')
+            # Also print to stderr so operator sees it even without checking logs
+            import sys as _sys
+            print(f'\n  [!] PCAP write failed: {e}\n'
+                  f'      Use --no-pcap to suppress, or check Scapy installation.',
+                  file=_sys.stderr)
 
     def _write_combined_hash_files(self) -> None:
         """Write combined hash files — both annotated and hashcat-ready (clean) formats."""

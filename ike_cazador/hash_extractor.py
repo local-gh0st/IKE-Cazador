@@ -77,13 +77,17 @@ def extract_hash(probe: ProbeMetadata, response: ParsedResponse) -> Optional[Cap
     if response.ke_bytes == b'\x00' * len(response.ke_bytes):
         return None
 
-    # Determine hashcat mode from hash size
+    # Determine hashcat mode from hash algorithm.
+    # SHA256/SHA384/SHA512 have no current hashcat IKE-PSK mode.
+    # They are captured to sha256_captures.txt; use psk-crack for cracking.
     hash_alg = response.hash_alg
-    if hash_alg in (HashAlg.MD5,):
+    if hash_alg == HashAlg.MD5:
         hashcat_mode = 5300
-    else:
-        # SHA1, SHA256, SHA384, SHA512 all use mode 5400
+    elif hash_alg == HashAlg.SHA1:
         hashcat_mode = 5400
+    else:
+        # SHA256, SHA384, SHA512 — no hashcat mode; psk-crack handles these
+        hashcat_mode = None
 
     # Build hashcat line: all fields as lowercase hex, colon-delimited
     # Order: g_xr:g_xi:cky_r:cky_i:sai_b:idir_b:ni_b:nr_b:hash_r
@@ -161,8 +165,8 @@ def validate_capture(capture: 'CapturedHash') -> tuple:
             return False, [f'Field {name} contains non-hex characters']
 
     # hash_r must be a known HMAC output size
-    if hash_r_bytes not in (16, 20, 32):
-        return False, [f'hash_r size {hash_r_bytes}B is not 16 (MD5) / 20 (SHA1) / 32 (SHA256)']
+    if hash_r_bytes not in (16, 20, 32, 48, 64):
+        return False, [f'hash_r size {hash_r_bytes}B is not 16 (MD5) / 20 (SHA1) / 32 (SHA256) / 48 (SHA384) / 64 (SHA512)']
 
     # hash_r must not be all zeros
     if bytes.fromhex(parts[8]) == b'\x00' * hash_r_bytes:
@@ -217,38 +221,3 @@ def validate_capture(capture: 'CapturedHash') -> tuple:
         )
 
     return True, warnings
-    """
-    Validate that a hashcat line has the correct format.
-    Returns (is_valid, error_message).
-    """
-    parts = line.strip().split(':')
-    if len(parts) != 9:
-        return False, f'Expected 9 colon-separated fields, got {len(parts)}'
-
-    field_names = ['g_xr', 'g_xi', 'cky_r', 'cky_i', 'sai_b', 'idir_b', 'ni_b', 'nr_b', 'hash_r']
-    expected_min_lengths = {
-        'cky_r':  16,   # 8 bytes
-        'cky_i':  16,   # 8 bytes
-        'ni_b':   16,   # 8+ bytes
-        'nr_b':   16,   # 8+ bytes
-        'hash_r': 32,   # 16 bytes (MD5 minimum)
-    }
-
-    for i, (name, part) in enumerate(zip(field_names, parts)):
-        # Must be valid hex
-        try:
-            val = bytes.fromhex(part)
-        except ValueError:
-            return False, f'Field {name} is not valid hex'
-
-        # Must not be all zeros
-        if val == b'\x00' * len(val):
-            return False, f'Field {name} is all zeros — likely invalid capture'
-
-        # Check minimum length
-        if name in expected_min_lengths:
-            min_len = expected_min_lengths[name]
-            if len(part) < min_len:
-                return False, f'Field {name} too short: {len(part)} chars (min {min_len})'
-
-    return True, 'OK'

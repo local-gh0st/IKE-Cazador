@@ -103,8 +103,8 @@ _EXACT_VENDORS: dict[str, VendorInfo] = {
         'OpenSwan or Libreswan IKE daemon'
     ),
 
-    # Microsoft L2TP/IPsec
-    'msft l2tp security 1.0000000': VendorInfo(  # placeholder — actual bytes below
+    # Microsoft L2TP/IPsec — correct MD5 hash of "MS L2TP IPSec VPN" payload
+    '4048b7d56ebce88525e7de7f00d6c2d380000000': VendorInfo(
         'Microsoft L2TP',
         'Microsoft L2TP/IPsec VPN client'
     ),

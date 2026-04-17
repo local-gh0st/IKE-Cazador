@@ -182,11 +182,14 @@ DH_PROBE_ORDER = [
 
 # ---------------------------------------------------------------------------
 # Hashcat modes for IKE PSK
+# SHA256/SHA384/SHA512 have no hashcat mode — captured to sha256_captures.txt
 # ---------------------------------------------------------------------------
 HASHCAT_MODES = {
     HashAlg.MD5:    5300,
     HashAlg.SHA1:   5400,
-    HashAlg.SHA256: 5400,  # SHA256 uses same format, mode 5400 with longer hash
+    # SHA256, SHA384, SHA512: no hashcat mode exists for IKE-PSK with these hash algorithms.
+    # Hashes are captured and saved to sha256_captures.txt for future use.
+    # Use psk-crack for cracking (supports all DH groups and hash algorithms).
 }
 
 HASH_SIZES = {
